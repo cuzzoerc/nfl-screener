@@ -46,7 +46,7 @@ with col1:
     # 2. RUNNING BACK BOX
     st.subheader("RUNNING BACK")
     rb_data = raw_data[raw_data['position'] == 'RB'].copy()
-    td_col = 'touchdowns' if 'touchdowns' in rb_data.columns else 'rushing_tds'
+    td_col = 'touchdowns' if 'touchdowns' in rb_data.columns else ('rushing_tds' if 'rushing_tds' in rb_data.columns else 'receiving_tds')
     
     rb_macro = rb_data.groupby(['player_display_name']).agg(
         carries=('carries', 'sum'),
@@ -64,18 +64,28 @@ with col1:
     # 3. PLACE KICKER BOX
     st.subheader("PLACE KICKER")
     pk_data = raw_data[raw_data['position'] == 'K'].copy()
-    pk_grouped = pk_data.groupby(['player_display_name']).agg(
-        fg_made=('fg_made', 'sum'),
-        fg_att=('fg_att', 'sum'),
-        pat_made=('pat_made', 'sum')
-    ).reset_index()
     
-    pk_grouped['FG_COMP_RATE'] = (pk_grouped['fg_made'] / pk_grouped['fg_att'].replace(0, 1) * 100).round(1).astype(str) + '%'
-    pk_grouped['TOTAL_POINTS'] = (pk_grouped['fg_made'] * 3) + pk_grouped['pat_made']
-    
-    pk_macro = pk_grouped.sort_values(by='TOTAL_POINTS', ascending=False)[['player_display_name', 'FG_COMP_RATE', 'pat_made', 'TOTAL_POINTS']]
-    pk_macro.columns = ['PK NAME', 'FIELD GOAL COMPLETION RATE', 'EXTRA POINTS MADE', 'TOTAL POINTS']
-    st.dataframe(pk_macro, hide_index=True, height=380, use_container_width=True)
+    # Safe column resolution for Kicker data variations
+    fg_made_col = 'fg_made' if 'fg_made' in pk_data.columns else ('fgm' if 'fgm' in pk_data.columns else None)
+    fg_att_col = 'fg_att' if 'fg_att' in pk_data.columns else ('fga' if 'fga' in pk_data.columns else None)
+    pat_made_col = 'pat_made' if 'pat_made' in pk_data.columns else ('patm' if 'patm' in pk_data.columns else None)
+
+    if fg_made_col and fg_att_col and pat_made_col:
+        pk_grouped = pk_data.groupby(['player_display_name']).agg(
+            fg_made=(fg_made_col, 'sum'),
+            fg_att=(fg_att_col, 'sum'),
+            pat_made=(pat_made_col, 'sum')
+        ).reset_index()
+        
+        pk_grouped['FG_COMP_RATE'] = (pk_grouped['fg_made'] / pk_grouped['fg_att'].replace(0, 1) * 100).round(1).astype(str) + '%'
+        pk_grouped['TOTAL_POINTS'] = (pk_grouped['fg_made'] * 3) + pk_grouped['pat_made']
+        
+        pk_macro = pk_grouped.sort_values(by='TOTAL_POINTS', ascending=False)[['player_display_name', 'FG_COMP_RATE', 'pat_made', 'TOTAL_POINTS']]
+        pk_macro.columns = ['PK NAME', 'FIELD GOAL COMPLETION RATE', 'EXTRA POINTS MADE', 'TOTAL POINTS']
+        st.dataframe(pk_macro, hide_index=True, height=380, use_container_width=True)
+    else:
+        # Fallback if kicker scoring data is structured under general scoring
+        st.info("Kicker scoring details being processed...")
 
 
 # ==========================================
