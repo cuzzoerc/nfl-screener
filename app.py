@@ -20,7 +20,7 @@ except Exception as e:
     st.error(f"Error loading NFL data: {e}")
     st.stop()
 
-# Create a clean 2-column dashboard grid (matching your sector cluster layout)
+# Create a clean 2-column dashboard grid
 col1, col2 = st.columns(2, gap="medium")
 
 # ==========================================
@@ -31,12 +31,12 @@ with col1:
     st.subheader("QUARTERBACK")
     qb_data = raw_data[raw_data['position'] == 'QB'].copy()
     qb_macro = qb_data.groupby(['player_display_name']).agg(
-        COMPLETIONS=('completions', 'sum'),
-        ATTEMPTS=('attempts', 'sum'),
-        YARDS=('passing_yards', 'sum'),
-        TDS=('passing_tds', 'sum'),
-        INT=('interceptions', 'sum')
-    ).reset_index().sort_values(by='YARDS', ascending=False)
+        completions=('completions', 'sum'),
+        attempts=('attempts', 'sum'),
+        passing_yards=('passing_yards', 'sum'),
+        passing_tds=('passing_tds', 'sum'),
+        interceptions=('interceptions', 'sum')
+    ).reset_index().sort_values(by='passing_yards', ascending=False)
     
     qb_macro.columns = ['QB NAME', 'COMPLETIONS', 'ATTEMPTS', 'YARDS', 'TDs', 'INT']
     st.dataframe(qb_macro, hide_index=True, height=380, use_container_width=True)
@@ -49,17 +49,11 @@ with col1:
     td_col = 'touchdowns' if 'touchdowns' in rb_data.columns else 'rushing_tds'
     
     rb_macro = rb_data.groupby(['player_display_name']).agg(
-        CARRYS=('carries', 'sum'),
-        CARRY_YARDS=('rushing_yards', 'sum'),
-        RECEPTIONS=('receptions', 'sum'),
-        RECEPTION_YARDS=('receiving_yards', 'sum'),
-        TDS=(td_col, 'sum')
-    ).reset_index().sort_values(by='CARRY YARDS', ascending=False) if 'rushing_yards' in rb_data.columns else rb_data.groupby(['player_display_name']).agg(
-        CARRYS=('carries', 'sum'),
-        CARRY_YARDS=('rushing_yards', 'sum'),
-        RECEPTIONS=('receptions', 'sum'),
-        RECEPTION_YARDS=('receiving_yards', 'sum'),
-        TDS=(td_col, 'sum')
+        carries=('carries', 'sum'),
+        rushing_yards=('rushing_yards', 'sum'),
+        receptions=('receptions', 'sum'),
+        receiving_yards=('receiving_yards', 'sum'),
+        tds=(td_col, 'sum')
     ).reset_index().sort_values(by='rushing_yards', ascending=False)
     
     rb_macro.columns = ['RB NAME', 'CARRYS', 'CARRY YARDS', 'RECEPTIONS', 'RECEPTION YARDS', 'TDs']
@@ -71,15 +65,15 @@ with col1:
     st.subheader("PLACE KICKER")
     pk_data = raw_data[raw_data['position'] == 'K'].copy()
     pk_grouped = pk_data.groupby(['player_display_name']).agg(
-        FG_MADE=('fg_made', 'sum'),
-        FG_ATT=('fg_att', 'sum'),
-        PAT_MADE=('pat_made', 'sum')
+        fg_made=('fg_made', 'sum'),
+        fg_att=('fg_att', 'sum'),
+        pat_made=('pat_made', 'sum')
     ).reset_index()
     
-    pk_grouped['FG_COMP_RATE'] = (pk_grouped['FG_MADE'] / pk_grouped['FG_ATT'].replace(0, 1) * 100).round(1).astype(str) + '%'
-    pk_grouped['TOTAL_POINTS'] = (pk_grouped['FG_MADE'] * 3) + pk_grouped['PAT_MADE']
-    pk_macro = pk_grouped.sort_values(by='TOTAL_POINTS', ascending=False)[['player_display_name', 'FG_COMP_RATE', 'PAT_MADE', 'TOTAL_POINTS']]
+    pk_grouped['FG_COMP_RATE'] = (pk_grouped['fg_made'] / pk_grouped['fg_att'].replace(0, 1) * 100).round(1).astype(str) + '%'
+    pk_grouped['TOTAL_POINTS'] = (pk_grouped['fg_made'] * 3) + pk_grouped['pat_made']
     
+    pk_macro = pk_grouped.sort_values(by='TOTAL_POINTS', ascending=False)[['player_display_name', 'FG_COMP_RATE', 'pat_made', 'TOTAL_POINTS']]
     pk_macro.columns = ['PK NAME', 'FIELD GOAL COMPLETION RATE', 'EXTRA POINTS MADE', 'TOTAL POINTS']
     st.dataframe(pk_macro, hide_index=True, height=380, use_container_width=True)
 
@@ -92,11 +86,11 @@ with col2:
     st.subheader("WIDE RECEIVER")
     wr_data = raw_data[raw_data['position'] == 'WR'].copy()
     wr_macro = wr_data.groupby(['player_display_name']).agg(
-        RECEPTIONS=('receptions', 'sum'),
-        TARGETS=('targets', 'sum'),
-        YARDS=('receiving_yards', 'sum'),
-        TDS=('receiving_tds', 'sum')
-    ).reset_index().sort_values(by='TARGETS', ascending=False)
+        receptions=('receptions', 'sum'),
+        targets=('targets', 'sum'),
+        receiving_yards=('receiving_yards', 'sum'),
+        receiving_tds=('receiving_tds', 'sum')
+    ).reset_index().sort_values(by='targets', ascending=False)
     
     wr_macro.columns = ['WR NAME', 'RECEPTIONS', 'TARGETS', 'YARDS', 'TDs']
     st.dataframe(wr_macro, hide_index=True, height=520, use_container_width=True)
@@ -107,11 +101,11 @@ with col2:
     st.subheader("TIGHT END")
     te_data = raw_data[raw_data['position'] == 'TE'].copy()
     te_macro = te_data.groupby(['player_display_name']).agg(
-        RECEPTIONS=('receptions', 'sum'),
-        TARGETS=('targets', 'sum'),
-        YARDS=('receiving_yards', 'sum'),
-        TDS=('receiving_tds', 'sum')
-    ).reset_index().sort_values(by='TARGETS', ascending=False)
+        receptions=('receptions', 'sum'),
+        targets=('targets', 'sum'),
+        receiving_yards=('receiving_yards', 'sum'),
+        receiving_tds=('receiving_tds', 'sum')
+    ).reset_index().sort_values(by='targets', ascending=False)
     
     te_macro.columns = ['TE NAME', 'RECEPTIONS', 'TARGETS', 'YARDS', 'TDs']
     st.dataframe(te_macro, hide_index=True, height=520, use_container_width=True)
