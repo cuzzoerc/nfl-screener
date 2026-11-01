@@ -56,7 +56,7 @@ with col1:
         tds=(td_col, 'sum')
     ).reset_index().sort_values(by='rushing_yards', ascending=False)
     
-    rb_macro.columns = ['RB NAME', 'CARRYS', 'CARRY YARDS', 'RECEPTIONS', 'RECEPTION YARDS', 'TDs']
+    rb_macro.columns = ['RB NAME', 'CARRIES', 'CARRY YARDS', 'RECEPTIONS', 'RECEPTION YARDS', 'TDs']
     st.dataframe(rb_macro, hide_index=True, height=380, use_container_width=True)
 
     st.markdown("---")
