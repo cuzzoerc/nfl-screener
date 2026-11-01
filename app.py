@@ -24,7 +24,7 @@ except Exception as e:
 col1, col2 = st.columns(2, gap="medium")
 
 # ==========================================
-# COLUMN 1: QUARTERBACKS, RUNNING BACKS, KICKERS
+# COLUMN 1: QUARTERBACKS, RUNNING BACKS, DEFENSE
 # ==========================================
 with col1:
     # 1. QUARTERBACK BOX
@@ -39,7 +39,7 @@ with col1:
     ).reset_index().sort_values(by='passing_yards', ascending=False)
     
     qb_macro.columns = ['QB NAME', 'COMPLETIONS', 'ATTEMPTS', 'YARDS', 'TDs', 'INT']
-    st.dataframe(qb_macro, hide_index=True, height=380, use_container_width=True)
+    st.dataframe(qb_macro, hide_index=True, height=350, use_container_width=True)
 
     st.markdown("---")
 
@@ -57,47 +57,30 @@ with col1:
     ).reset_index().sort_values(by='rushing_yards', ascending=False)
     
     rb_macro.columns = ['RB NAME', 'CARRYS', 'CARRY YARDS', 'RECEPTIONS', 'RECEPTION YARDS', 'TDs']
-    st.dataframe(rb_macro, hide_index=True, height=380, use_container_width=True)
+    st.dataframe(rb_macro, hide_index=True, height=350, use_container_width=True)
 
     st.markdown("---")
 
-    # 3. PLACE KICKER BOX (Robust dynamic mapping)
-    st.subheader("PLACE KICKER")
-    pk_data = raw_data[raw_data['position'] == 'K'].copy()
+    # 3. TEAM DEFENSE BOX
+    st.subheader("TEAM DEFENSE")
+    def_df = raw_data.groupby('opponent_team').agg(
+        pass_yds=('passing_yards', 'sum'),
+        pass_tds=('passing_tds', 'sum'),
+        rush_yds=('rushing_yards', 'sum'),
+        rush_tds=('rushing_tds', 'sum'),
+        games=('week', 'nunique')
+    ).reset_index()
     
-    if not pk_data.empty:
-        # Dynamically find FG and PAT columns available in weekly data
-        cols = pk_data.columns
-        fgm_col = next((c for c in ['fgm', 'fg_made', 'field_goals_made'] if c in cols), None)
-        fga_col = next((c for c in ['fga', 'fg_att', 'field_goals_attempted'] if c in cols), None)
-        pat_col = next((c for c in ['pat_made', 'patm', 'extra_points_made'] if c in cols), None)
-        
-        if fgm_col and fga_col:
-            agg_dict = {fgm_col: ('sum'), fga_col: ('sum')}
-            if pat_col:
-                agg_dict[pat_col] = ('sum')
-                
-            pk_grouped = pk_data.groupby(['player_display_name']).agg(**agg_dict).reset_index()
-            
-            # Normalize column names for calculations
-            pk_grouped = pk_grouped.rename(columns={fgm_col: 'fgm', fga_col: 'fga'})
-            if pat_col:
-                pk_grouped = pk_grouped.rename(columns={pat_col: 'pat_made'})
-                pk_grouped['TOTAL_POINTS'] = (pk_grouped['fgm'] * 3) + pk_grouped['pat_made']
-            else:
-                pk_grouped['pat_made'] = 0
-                pk_grouped['TOTAL_POINTS'] = pk_grouped['fgm'] * 3
-
-            pk_grouped['FG_COMP_RATE'] = (pk_grouped['fgm'] / pk_grouped['fga'].replace(0, 1) * 100).round(1).astype(str) + '%'
-            
-            pk_macro = pk_grouped.sort_values(by='TOTAL_POINTS', ascending=False)[['player_display_name', 'FG_COMP_RATE', 'pat_made', 'TOTAL_POINTS']]
-            pk_macro.columns = ['PK NAME', 'FIELD GOAL COMPLETION RATE', 'EXTRA POINTS MADE', 'TOTAL POINTS']
-            st.dataframe(pk_macro, hide_index=True, height=380, use_container_width=True)
-        else:
-            # Fallback display showing raw columns if specific names differ
-            st.warning("Kicker field goal metrics unavailable in current weekly feed schema.")
-    else:
-        st.info("No kicker data found for current filter.")
+    def_df['AVG_PASS_YDS'] = (def_df['pass_yds'] / def_df['games']).round(1)
+    def_df['AVG_RUSH_YDS'] = (def_df['rush_yds'] / def_df['games']).round(1)
+    def_df['TOTAL_YDS'] = def_df['pass_yds'] + def_df['rush_yds']
+    def_df['DEFENSE_RANK'] = def_df['TOTAL_YDS'].rank(ascending=True, method='min').astype(int)
+    
+    def_macro = def_df.sort_values(by='DEFENSE_RANK', ascending=True)[[
+        'opponent_team', 'AVG_PASS_YDS', 'pass_tds', 'AVG_RUSH_YDS', 'rush_tds', 'DEFENSE_RANK'
+    ]]
+    def_macro.columns = ['TEAM', 'PASS YDS/G', 'PASS TDS', 'RUSH YDS/G', 'RUSH TDS', 'RANK']
+    st.dataframe(def_macro, hide_index=True, height=350, use_container_width=True)
 
 
 # ==========================================
