@@ -5,7 +5,7 @@ import pandas as pd
 # Set wide layout to support the multi-box dashboard matrix
 st.set_page_config(page_title="NFL Cluster Matrix Screener", layout="wide")
 
-st.title("🚀 NFL Performance Cluster Matrix")
+st.title("NFL Performance Cluster Matrix")
 st.caption("Multi-position market intelligence dashboard — Updated daily at 00:00 EST.")
 
 # Cached data loader for active/recent season
