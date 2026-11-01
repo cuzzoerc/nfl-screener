@@ -39,7 +39,7 @@ with col1:
     ).reset_index().sort_values(by='passing_yards', ascending=False)
     
     qb_macro.columns = ['QB NAME', 'COMPLETIONS', 'ATTEMPTS', 'YARDS', 'TDs', 'INT']
-    st.dataframe(qb_macro, hide_index=True, height=350, use_container_width=True)
+    st.dataframe(qb_macro, hide_index=True, height=380, use_container_width=True)
 
     st.markdown("---")
 
@@ -57,7 +57,7 @@ with col1:
     ).reset_index().sort_values(by='rushing_yards', ascending=False)
     
     rb_macro.columns = ['RB NAME', 'CARRYS', 'CARRY YARDS', 'RECEPTIONS', 'RECEPTION YARDS', 'TDs']
-    st.dataframe(rb_macro, hide_index=True, height=350, use_container_width=True)
+    st.dataframe(rb_macro, hide_index=True, height=380, use_container_width=True)
 
     st.markdown("---")
 
@@ -80,7 +80,7 @@ with col1:
         'opponent_team', 'AVG_PASS_YDS', 'pass_tds', 'AVG_RUSH_YDS', 'rush_tds', 'DEFENSE_RANK'
     ]]
     def_macro.columns = ['TEAM', 'PASS YDS/G', 'PASS TDS', 'RUSH YDS/G', 'RUSH TDS', 'RANK']
-    st.dataframe(def_macro, hide_index=True, height=350, use_container_width=True)
+    st.dataframe(def_macro, hide_index=True, height=380, use_container_width=True)
 
 
 # ==========================================
@@ -98,7 +98,7 @@ with col2:
     ).reset_index().sort_values(by='targets', ascending=False)
     
     wr_macro.columns = ['WR NAME', 'RECEPTIONS', 'TARGETS', 'YARDS', 'TDs']
-    st.dataframe(wr_macro, hide_index=True, height=520, use_container_width=True)
+    st.dataframe(wr_macro, hide_index=True, height=380, use_container_width=True)
 
     st.markdown("---")
 
@@ -113,4 +113,4 @@ with col2:
     ).reset_index().sort_values(by='targets', ascending=False)
     
     te_macro.columns = ['TE NAME', 'RECEPTIONS', 'TARGETS', 'YARDS', 'TDs']
-    st.dataframe(te_macro, hide_index=True, height=520, use_container_width=True)
+    st.dataframe(te_macro, hide_index=True, height=380, use_container_width=True)
