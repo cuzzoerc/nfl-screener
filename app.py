@@ -63,7 +63,7 @@ def render_terminal_section(title, pos_df, group_col, stat_dict, sort_col, log_c
     if sort_col in totals.columns:
         totals = totals.sort_values(by=sort_col, ascending=False)
 
-    # 1. Render Clean Financial Terminal Table (Image 2 style)
+    # 1. Render Clean Financial Terminal Table
     display_df = totals.copy()
     display_df.columns = [c.replace('_', ' ').upper() for c in display_df.columns]
     st.dataframe(display_df, hide_index=True, height=320, use_container_width=True)
@@ -85,11 +85,12 @@ def render_terminal_section(title, pos_df, group_col, stat_dict, sort_col, log_c
         st.markdown(f"**Last 5 Games: {selected_player}**")
         st.dataframe(log_df, hide_index=True, use_container_width=True)
 
+
 # Layout Matrix (2 Columns)
 col1, col2 = st.columns(2, gap="medium")
 
 with col1:
-    # QUARTERBACK
+    # 1. QUARTERBACK
     qb_data = filtered_data[filtered_data['position'].astype(str).str.upper() == 'QB'].copy() if 'position' in filtered_data.columns else pd.DataFrame()
     qb_stats = {'completions': 'sum', 'attempts': 'sum', 'passing_yards': 'sum', 'passing_tds': 'sum', 'interceptions': 'sum'}
     qb_logs = ['week', 'recent_team', 'opponent_team', 'completions', 'attempts', 'passing_yards', 'passing_tds', 'interceptions']
@@ -97,14 +98,37 @@ with col1:
 
     st.markdown("---")
 
-    # RUNNING BACK
+    # 2. RUNNING BACK
     rb_data = filtered_data[filtered_data['position'].astype(str).str.upper() == 'RB'].copy() if 'position' in filtered_data.columns else pd.DataFrame()
     rb_stats = {'carries': 'sum', 'rushing_yards': 'sum', 'receptions': 'sum', 'receiving_yards': 'sum', 'rushing_tds': 'sum'}
     rb_logs = ['week', 'recent_team', 'opponent_team', 'carries', 'rushing_yards', 'rushing_tds', 'receptions', 'receiving_yards']
     render_terminal_section("RUNNING BACK (2026)", rb_data, 'player_display_name', rb_stats, 'rushing_yards', rb_logs)
 
+    st.markdown("---")
+
+    # 3. TEAM DEFENSE
+    st.subheader("TEAM DEFENSE (2026)")
+    opp_col = 'opponent_team' if 'opponent_team' in filtered_data.columns else None
+    if opp_col:
+        def_agg = {'passing_yards': 'sum', 'passing_tds': 'sum', 'rushing_yards': 'sum', 'rushing_tds': 'sum', 'week': 'nunique'}
+        existing_agg = {k: v for k, v in def_agg.items() if k in filtered_data.columns}
+        def_df = filtered_data.groupby(opp_col).agg(existing_agg).reset_index()
+        if not def_df.empty:
+            def_df = def_df.rename(columns={'passing_yards': 'PASS_YDS', 'passing_tds': 'PASS_TDS', 'rushing_yards': 'RUSH_YDS', 'rushing_tds': 'RUSH_TDS', 'week': 'GAMES'})
+            def_df['AVG_PASS_YDS'] = (def_df['PASS_YDS'] / def_df['GAMES']).round(1)
+            def_df['AVG_RUSH_YDS'] = (def_df['RUSH_YDS'] / def_df['GAMES']).round(1)
+            def_df['TOTAL_YDS'] = def_df['PASS_YDS'] + def_df['RUSH_YDS']
+            def_df['RANK'] = def_df['TOTAL_YDS'].rank(ascending=True, method='min').astype(int)
+            def_macro = def_df.sort_values(by='RANK', ascending=True)[[opp_col, 'AVG_PASS_YDS', 'PASS_TDS', 'AVG_RUSH_YDS', 'RUSH_TDS', 'RANK']]
+            def_macro.columns = ['TEAM', 'PASS YDS/G', 'PASS TDS', 'RUSH YDS/G', 'RUSH TDS', 'RANK']
+            st.dataframe(def_macro, hide_index=True, height=320, use_container_width=True)
+        else:
+            st.info("Defense metrics unavailable.")
+    else:
+        st.info("Defense opponent column missing.")
+
 with col2:
-    # WIDE RECEIVER
+    # 4. WIDE RECEIVER
     wr_data = filtered_data[filtered_data['position'].astype(str).str.upper() == 'WR'].copy() if 'position' in filtered_data.columns else pd.DataFrame()
     wr_stats = {'receptions': 'sum', 'targets': 'sum', 'receiving_yards': 'sum', 'receiving_tds': 'sum'}
     wr_logs = ['week', 'recent_team', 'opponent_team', 'receptions', 'targets', 'receiving_yards', 'receiving_tds']
@@ -112,7 +136,7 @@ with col2:
 
     st.markdown("---")
 
-    # TIGHT END
+    # 5. TIGHT END
     te_data = filtered_data[filtered_data['position'].astype(str).str.upper() == 'TE'].copy() if 'position' in filtered_data.columns else pd.DataFrame()
     te_stats = {'receptions': 'sum', 'targets': 'sum', 'receiving_yards': 'sum', 'receiving_tds': 'sum'}
     te_logs = ['week', 'recent_team', 'opponent_team', 'receptions', 'targets', 'receiving_yards', 'receiving_tds']
