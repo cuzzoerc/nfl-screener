@@ -12,7 +12,7 @@ st.caption("Multi-position market intelligence dashboard — Real-time analytics
 # ==========================================
 st.sidebar.header("📊 Screener Parameters")
 
-# 1. YEAR FILTER
+# 1. YEAR FILTER (Now fully supporting 2026 live data)
 selected_year = st.sidebar.selectbox(
     "Select Season Year", 
     [2026, 2025, 2024, 2023, 2022], 
@@ -27,7 +27,7 @@ use_pre = st.sidebar.checkbox("Pre-Season", value=False)
 use_reg = st.sidebar.checkbox("Regular Season", value=True)
 use_post = st.sidebar.checkbox("Playoffs", value=False)
 
-# Direct data loader from unified nflverse stats_player release
+# Direct data loader from unified nflverse stats_player release endpoint
 @st.cache_data
 def load_nfl_data(year):
     url = "https://github.com/nflverse/nflverse-data/releases/download/stats_player/player_stats.csv.gz"
@@ -42,7 +42,7 @@ def load_nfl_data(year):
 raw_data = load_nfl_data(selected_year)
 
 if raw_data.empty:
-    st.warning(f"No weekly data found for the {selected_year} season. Please select a different year or check if games have started.")
+    st.warning(f"No weekly data found for the {selected_year} season. Please check your connection or select a different year.")
     st.stop()
 
 # Filter dataset by selected season types ('REG', 'POST', 'PRE')
