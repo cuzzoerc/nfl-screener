@@ -5,64 +5,54 @@ import pandas as pd
 st.set_page_config(page_title="NFL Cluster Matrix Screener", layout="wide")
 
 st.title("🚀 NFL Performance Cluster Matrix")
-st.caption("Multi-position market intelligence dashboard — Real-time analytics terminal (2026 Season Active).")
+st.caption("Multi-position market intelligence dashboard — Live 2026 Terminal.")
 
 # ==========================================
-# SIDEBAR FILTERS (YEAR & SEASON TYPES)
+# SIMPLIFIED SIDEBAR (GAME TYPE TOGGLES)
 # ==========================================
 st.sidebar.header("📊 Screener Parameters")
-
-# 1. YEAR FILTER
-selected_year = st.sidebar.selectbox(
-    "Select Season Year", 
-    [2026, 2025, 2024, 2023, 2022], 
-    index=0
-)
+st.sidebar.info("Active Season: **2026 (Week 8)**")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Game Type Filters")
 
-# 2, 3, 4. TOGGLES FOR PRE-SEASON, REGULAR SEASON, PLAYOFFS
 use_pre = st.sidebar.checkbox("Pre-Season", value=False)
 use_reg = st.sidebar.checkbox("Regular Season", value=True)
 use_post = st.sidebar.checkbox("Playoffs", value=False)
 
-# Direct robust data loader for nflverse stats_player release endpoint
+# Robust data loader using the official current-season nflverse data endpoint
 @st.cache_data
-def load_nfl_data(year):
-    # Primary URL for unified player stats csv.gz
-    url = "https://github.com/nflverse/nflverse-data/releases/download/stats_player/player_stats.csv.gz"
+def load_current_nfl_data():
+    # Official current season player stats CSV endpoint from nflverse-data
+    url = "https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats_2026.csv"
+    
+    # Fallback to parquet or compressed format if csv doesn't exist yet for current week
+    fallback_url = "https://github.com/nflverse/nflverse-data/releases/download/stats_player/player_stats.csv.gz"
+    
     try:
-        df = pd.read_csv(url, compression='gzip')
-        if 'season' in df.columns:
-            df_filtered = df[df['season'] == year].copy()
-            if not df_filtered.empty:
-                return df_filtered
-        # If year column isn't found or filtered is empty, return whole df as backup
+        df = pd.read_csv(url)
         return df
-    except Exception as e:
-        # Fallback URL pattern if primary release tag shifts
+    except Exception:
         try:
-            fallback_url = f"https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats_{year}.csv"
-            return pd.read_csv(fallback_url)
-        except Exception as inner_e:
-            st.error(f"Data ingestion error: {e} | Fallback error: {inner_e}")
+            df = pd.read_csv(fallback_url, compression='gzip')
+            if 'season' in df.columns:
+                df = df[df['season'] == 2026]
+            return df
+        except Exception as e:
+            st.error(f"Failed to fetch live data feed: {e}")
             return pd.DataFrame()
 
-raw_data = load_nfl_data(selected_year)
+raw_data = load_current_nfl_data()
 
 if raw_data.empty:
-    st.warning(f"No weekly data found for the {selected_year} season. Please check your network connection or verify release availability.")
+    st.warning("Live 2026 weekly data is currently syncing or unavailable from the remote endpoint. Please check back shortly.")
     st.stop()
 
 # Filter dataset by selected season types ('REG', 'POST', 'PRE')
 allowed_types = []
-if use_pre:
-    allowed_types.append('PRE')
-if use_reg:
-    allowed_types.append('REG')
-if use_post:
-    allowed_types.append('POST')
+if use_pre: allowed_types.append('PRE')
+if use_reg: allowed_types.append('REG')
+if use_post: allowed_types.append('POST')
 
 if 'season_type' in raw_data.columns and allowed_types:
     filtered_data = raw_data[raw_data['season_type'].isin(allowed_types)].copy()
@@ -70,7 +60,7 @@ else:
     filtered_data = raw_data.copy()
 
 if filtered_data.empty:
-    st.warning("No records match your selected season type filters. Please enable at least one game type in the sidebar.")
+    st.warning("No records match your selected game type filters.")
     st.stop()
 
 # Create a clean 2-column dashboard grid
@@ -95,7 +85,7 @@ with col1:
         qb_macro.columns = ['QB NAME', 'COMPLETIONS', 'ATTEMPTS', 'YARDS', 'TDs', 'INT']
         st.dataframe(qb_macro, hide_index=True, height=380, use_container_width=True)
     else:
-        st.info("No quarterback data available for current filters.")
+        st.info("No quarterback data available.")
 
     st.markdown("---")
 
@@ -116,7 +106,7 @@ with col1:
         rb_macro.columns = ['RB NAME', 'CARRYS', 'CARRY YARDS', 'RECEPTIONS', 'RECEPTION YARDS', 'TDs']
         st.dataframe(rb_macro, hide_index=True, height=380, use_container_width=True)
     else:
-        st.info("No running back data available for current filters.")
+        st.info("No running back data available.")
 
     st.markdown("---")
 
@@ -163,7 +153,7 @@ with col2:
         wr_macro.columns = ['WR NAME', 'RECEPTIONS', 'TARGETS', 'YARDS', 'TDs']
         st.dataframe(wr_macro, hide_index=True, height=380, use_container_width=True)
     else:
-        st.info("No wide receiver data available for current filters.")
+        st.info("No wide receiver data available.")
 
     st.markdown("---")
 
@@ -181,4 +171,4 @@ with col2:
         te_macro.columns = ['TE NAME', 'RECEPTIONS', 'TARGETS', 'YARDS', 'TDs']
         st.dataframe(te_macro, hide_index=True, height=380, use_container_width=True)
     else:
-        st.info("No tight end data available for current filters.")
+        st.info("No tight end data available.")
