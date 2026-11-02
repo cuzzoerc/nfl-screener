@@ -12,7 +12,7 @@ st.caption("Multi-position market intelligence dashboard — Real-time analytics
 # ==========================================
 st.sidebar.header("📊 Screener Parameters")
 
-# 1. YEAR FILTER (Supports current and prior seasons)
+# 1. YEAR FILTER
 selected_year = st.sidebar.selectbox(
     "Select Season Year", 
     [2026, 2025, 2024, 2023, 2022], 
