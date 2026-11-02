@@ -106,21 +106,39 @@ with col1:
 
     st.markdown("---")
 
-    # 3. TEAM DEFENSE
+    # 3. TEAM DEFENSE (Aligned per-game averages & official ranking)
     st.subheader("TEAM DEFENSE (2026)")
     opp_col = 'opponent_team' if 'opponent_team' in filtered_data.columns else None
     if opp_col:
-        def_agg = {'passing_yards': 'sum', 'passing_tds': 'sum', 'rushing_yards': 'sum', 'rushing_tds': 'sum', 'week': 'nunique'}
+        def_agg = {
+            'passing_yards': 'sum', 
+            'passing_tds': 'sum', 
+            'rushing_yards': 'sum', 
+            'rushing_tds': 'sum', 
+            'week': 'nunique'
+        }
         existing_agg = {k: v for k, v in def_agg.items() if k in filtered_data.columns}
         def_df = filtered_data.groupby(opp_col).agg(existing_agg).reset_index()
+        
         if not def_df.empty:
-            def_df = def_df.rename(columns={'passing_yards': 'PASS_YDS', 'passing_tds': 'PASS_TDS', 'rushing_yards': 'RUSH_YDS', 'rushing_tds': 'RUSH_TDS', 'week': 'GAMES'})
-            def_df['AVG_PASS_YDS'] = (def_df['PASS_YDS'] / def_df['GAMES']).round(1)
-            def_df['AVG_RUSH_YDS'] = (def_df['RUSH_YDS'] / def_df['GAMES']).round(1)
-            def_df['TOTAL_YDS'] = def_df['PASS_YDS'] + def_df['RUSH_YDS']
-            def_df['RANK'] = def_df['TOTAL_YDS'].rank(ascending=True, method='min').astype(int)
-            def_macro = def_df.sort_values(by='RANK', ascending=True)[[opp_col, 'AVG_PASS_YDS', 'PASS_TDS', 'AVG_RUSH_YDS', 'RUSH_TDS', 'RANK']]
+            def_df = def_df.rename(columns={
+                opp_col: 'TEAM',
+                'passing_yards': 'PASS_YDS', 
+                'passing_tds': 'PASS_TDS', 
+                'rushing_yards': 'RUSH_YDS', 
+                'rushing_tds': 'RUSH_TDS', 
+                'week': 'GP'
+            })
+            def_df['PASS YDS/G'] = (def_df['PASS_YDS'] / def_df['GP']).round(1)
+            def_df['RUSH YDS/G'] = (def_df['RUSH_YDS'] / def_df['GP']).round(1)
+            def_df['TOTAL YDS/G'] = def_df['PASS YDS/G'] + def_df['RUSH YDS/G']
+            def_df['RANK'] = def_df['TOTAL YDS/G'].rank(ascending=True, method='min').astype(int)
+            
+            def_macro = def_df.sort_values(by='RANK', ascending=True)[[
+                'TEAM', 'PASS YDS/G', 'PASS_TDS', 'RUSH YDS/G', 'RUSH_TDS', 'RANK'
+            ]]
             def_macro.columns = ['TEAM', 'PASS YDS/G', 'PASS TDS', 'RUSH YDS/G', 'RUSH TDS', 'RANK']
+            
             st.dataframe(def_macro, hide_index=True, height=320, use_container_width=True)
         else:
             st.info("Defense metrics unavailable.")
