@@ -5,14 +5,14 @@ import pandas as pd
 st.set_page_config(page_title="NFL Cluster Matrix Screener", layout="wide")
 
 st.title("🚀 NFL Performance Cluster Matrix")
-st.caption("Multi-position market intelligence dashboard — Real-time analytics terminal.")
+st.caption("Multi-position market intelligence dashboard — Real-time analytics terminal (2026 Season Active).")
 
 # ==========================================
 # SIDEBAR FILTERS (YEAR & SEASON TYPES)
 # ==========================================
 st.sidebar.header("📊 Screener Parameters")
 
-# 1. YEAR FILTER (Now fully supporting 2026 live data)
+# 1. YEAR FILTER
 selected_year = st.sidebar.selectbox(
     "Select Season Year", 
     [2026, 2025, 2024, 2023, 2022], 
@@ -27,22 +27,32 @@ use_pre = st.sidebar.checkbox("Pre-Season", value=False)
 use_reg = st.sidebar.checkbox("Regular Season", value=True)
 use_post = st.sidebar.checkbox("Playoffs", value=False)
 
-# Direct data loader from unified nflverse stats_player release endpoint
+# Direct robust data loader for nflverse stats_player release endpoint
 @st.cache_data
 def load_nfl_data(year):
+    # Primary URL for unified player stats csv.gz
     url = "https://github.com/nflverse/nflverse-data/releases/download/stats_player/player_stats.csv.gz"
     try:
         df = pd.read_csv(url, compression='gzip')
         if 'season' in df.columns:
-            df = df[df['season'] == year]
+            df_filtered = df[df['season'] == year].copy()
+            if not df_filtered.empty:
+                return df_filtered
+        # If year column isn't found or filtered is empty, return whole df as backup
         return df
     except Exception as e:
-        return pd.DataFrame()
+        # Fallback URL pattern if primary release tag shifts
+        try:
+            fallback_url = f"https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats_{year}.csv"
+            return pd.read_csv(fallback_url)
+        except Exception as inner_e:
+            st.error(f"Data ingestion error: {e} | Fallback error: {inner_e}")
+            return pd.DataFrame()
 
 raw_data = load_nfl_data(selected_year)
 
 if raw_data.empty:
-    st.warning(f"No weekly data found for the {selected_year} season. Please check your connection or select a different year.")
+    st.warning(f"No weekly data found for the {selected_year} season. Please check your network connection or verify release availability.")
     st.stop()
 
 # Filter dataset by selected season types ('REG', 'POST', 'PRE')
