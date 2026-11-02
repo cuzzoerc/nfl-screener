@@ -134,24 +134,26 @@ with col1:
         }
         def_df = safe_agg(filtered_data, 'opponent_team', def_agg, 'passing_yards')
         if not def_df.empty:
-            # Rename for defensive calculation
             def_df = def_df.rename(columns={
-                'PASSING_YARDS': 'pass_yds',
-                'PASSING_TDS': 'pass_tds',
-                'RUSHING_YARDS': 'rush_yds',
-                'RUSHING_TDS': 'rush_tds',
-                'WEEK': 'games'
+                'passing_yards': 'pass_yds',
+                'passing_tds': 'pass_tds',
+                'rushing_yards': 'rush_yds',
+                'rushing_tds': 'rush_tds',
+                'week': 'games'
             })
-            def_df['AVG_PASS_YDS'] = (def_df['pass_yds'] / def_df['games']).round(1)
-            def_df['AVG_RUSH_YDS'] = (def_df['rush_yds'] / def_df['games']).round(1)
-            def_df['TOTAL_YDS'] = def_df['pass_yds'] + def_df['rush_yds']
-            def_df['RANK'] = def_df['TOTAL_YDS'].rank(ascending=True, method='min').astype(int)
-            
-            def_macro = def_df.sort_values(by='RANK', ascending=True)[[
-                'OPPONENT_TEAM', 'AVG_PASS_YDS', 'pass_tds', 'AVG_RUSH_YDS', 'rush_tds', 'RANK'
-            ]]
-            def_macro.columns = ['TEAM', 'PASS YDS/G', 'PASS TDS', 'RUSH YDS/G', 'RUSH TDS', 'RANK']
-            st.dataframe(def_macro, hide_index=True, height=380, use_container_width=True)
+            if {'pass_yds', 'games'}.issubset(def_df.columns):
+                def_df['AVG_PASS_YDS'] = (def_df['pass_yds'] / def_df['games']).round(1)
+                def_df['AVG_RUSH_YDS'] = (def_df['rush_yds'] / def_df['games']).round(1)
+                def_df['TOTAL_YDS'] = def_df['pass_yds'] + def_df['rush_yds']
+                def_df['RANK'] = def_df['TOTAL_YDS'].rank(ascending=True, method='min').astype(int)
+                
+                def_macro = def_df.sort_values(by='RANK', ascending=True)[[
+                    'opponent_team', 'AVG_PASS_YDS', 'pass_tds', 'AVG_RUSH_YDS', 'rush_tds', 'RANK'
+                ]]
+                def_macro.columns = ['TEAM', 'PASS YDS/G', 'PASS TDS', 'RUSH YDS/G', 'RUSH TDS', 'RANK']
+                st.dataframe(def_macro, hide_index=True, height=380, use_container_width=True)
+            else:
+                st.info("Defense calculation columns missing.")
         else:
             st.info("Defense metrics unavailable.")
     else:
