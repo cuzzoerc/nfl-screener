@@ -27,12 +27,12 @@ use_pre = st.sidebar.checkbox("Pre-Season", value=False)
 use_reg = st.sidebar.checkbox("Regular Season", value=True)
 use_post = st.sidebar.checkbox("Playoffs", value=False)
 
-# Direct data loader from nflverse-data releases
+# Direct data loader from nflverse-data stats_player release endpoint (.csv.gz)
 @st.cache_data
 def load_nfl_data(year):
-    url = f"https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats_{year}.csv"
+    url = f"https://github.com/nflverse/nflverse-data/releases/download/stats_player/player_stats_{year}.csv.gz"
     try:
-        df = pd.read_csv(url)
+        df = pd.read_csv(url, compression='gzip')
         return df
     except Exception as e:
         return pd.DataFrame()
