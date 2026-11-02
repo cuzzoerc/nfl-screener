@@ -5,13 +5,18 @@ import pandas as pd
 st.set_page_config(page_title="NFL Cluster Matrix Screener", layout="wide")
 
 st.title("🚀 NFL Performance Cluster Matrix")
-st.caption("Multi-position market intelligence dashboard — Live 2026 Terminal.")
+st.caption("Multi-position market intelligence dashboard — Live Terminal (2026 Season).")
 
 # ==========================================
-# SIMPLIFIED SIDEBAR (GAME TYPE TOGGLES)
+# SIDEBAR FILTERS (YEAR & SEASON TYPES)
 # ==========================================
 st.sidebar.header("📊 Screener Parameters")
-st.sidebar.info("Active Season: **2026 (Week 8)**")
+
+selected_year = st.sidebar.selectbox(
+    "Select Season Year", 
+    [2026, 2025, 2024, 2023, 2022], 
+    index=0
+)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Game Type Filters")
@@ -20,32 +25,25 @@ use_pre = st.sidebar.checkbox("Pre-Season", value=False)
 use_reg = st.sidebar.checkbox("Regular Season", value=True)
 use_post = st.sidebar.checkbox("Playoffs", value=False)
 
-# Robust data loader using the official current-season nflverse data endpoint
+# Direct data loader using the master parquet endpoint from nflverse-data
 @st.cache_data
-def load_current_nfl_data():
-    # Official current season player stats CSV endpoint from nflverse-data
-    url = "https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats_2026.csv"
-    
-    # Fallback to parquet or compressed format if csv doesn't exist yet for current week
-    fallback_url = "https://github.com/nflverse/nflverse-data/releases/download/stats_player/player_stats.csv.gz"
-    
+def load_nfl_data(year):
+    url = "https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats.parquet"
     try:
-        df = pd.read_csv(url)
+        # Read parquet directly using pandas (requires pyarrow package)
+        df = pd.read_parquet(url)
+        if 'season' in df.columns:
+            df_filtered = df[df['season'] == year].copy()
+            return df_filtered
         return df
-    except Exception:
-        try:
-            df = pd.read_csv(fallback_url, compression='gzip')
-            if 'season' in df.columns:
-                df = df[df['season'] == 2026]
-            return df
-        except Exception as e:
-            st.error(f"Failed to fetch live data feed: {e}")
-            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Failed to load master parquet feed: {e}")
+        return pd.DataFrame()
 
-raw_data = load_current_nfl_data()
+raw_data = load_nfl_data(selected_year)
 
 if raw_data.empty:
-    st.warning("Live 2026 weekly data is currently syncing or unavailable from the remote endpoint. Please check back shortly.")
+    st.warning(f"No records found for the {selected_year} season.")
     st.stop()
 
 # Filter dataset by selected season types ('REG', 'POST', 'PRE')
