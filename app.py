@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
+import nflreadpy as nfl
 
 # Set wide layout to support the multi-box dashboard matrix
 st.set_page_config(page_title="NFL Cluster Matrix Screener", layout="wide")
 
 st.title("🚀 NFL Performance Cluster Matrix")
-st.caption("Multi-position market intelligence dashboard — Live Terminal (2026 Season).")
+st.caption("Multi-position market intelligence dashboard — Live Terminal.")
 
 # ==========================================
 # SIDEBAR FILTERS (YEAR & SEASON TYPES)
@@ -15,7 +16,7 @@ st.sidebar.header("📊 Screener Parameters")
 selected_year = st.sidebar.selectbox(
     "Select Season Year", 
     [2026, 2025, 2024, 2023, 2022], 
-    index=0
+    index=0  # Defaults directly to live 2026 season
 )
 
 st.sidebar.markdown("---")
@@ -25,35 +26,32 @@ use_pre = st.sidebar.checkbox("Pre-Season", value=False)
 use_reg = st.sidebar.checkbox("Regular Season", value=True)
 use_post = st.sidebar.checkbox("Playoffs", value=False)
 
-# Direct data loader using the master parquet endpoint from nflverse-data
+# Official nflreadpy data loader for live and historical telemetry
 @st.cache_data
 def load_nfl_data(year):
-    url = "https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats.parquet"
     try:
-        # Read parquet directly using pandas (requires pyarrow package)
-        df = pd.read_parquet(url)
-        if 'season' in df.columns:
-            df_filtered = df[df['season'] == year].copy()
-            return df_filtered
-        return df
+        df_polars = nfl.load_player_stats(seasons=[year])
+        if df_polars is not None and not df_polars.is_empty():
+            return df_polars.to_pandas()
+        return pd.DataFrame()
     except Exception as e:
-        st.error(f"Failed to load master parquet feed: {e}")
+        st.error(f"Failed to fetch live nflreadpy feed: {e}")
         return pd.DataFrame()
 
 raw_data = load_nfl_data(selected_year)
 
 if raw_data.empty:
-    st.warning(f"No records found for the {selected_year} season.")
+    st.warning(f"No records found for the {selected_year} season yet. The live data stream may still be syncing.")
     st.stop()
 
-# Filter dataset by selected season types ('REG', 'POST', 'PRE')
+# Robust case-insensitive game type filtering
 allowed_types = []
 if use_pre: allowed_types.append('PRE')
 if use_reg: allowed_types.append('REG')
 if use_post: allowed_types.append('POST')
 
 if 'season_type' in raw_data.columns and allowed_types:
-    filtered_data = raw_data[raw_data['season_type'].isin(allowed_types)].copy()
+    filtered_data = raw_data[raw_data['season_type'].astype(str).str.upper().isin(allowed_types)].copy()
 else:
     filtered_data = raw_data.copy()
 
