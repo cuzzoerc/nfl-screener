@@ -15,7 +15,7 @@ if st.sidebar.button("🔄 Force Refresh Live Data"):
     st.rerun()
 
 # ==========================================
-# STRICT 2026 SEASON LIVE DATA LOADER
+# STRICT 2026 SEASON LIVE DATA LOADERS
 # ==========================================
 @st.cache_data(ttl=300)
 def load_live_2026_data():
@@ -28,7 +28,7 @@ def load_live_2026_data():
             return df
         return pd.DataFrame()
     except Exception as e:
-        st.error(f"Failed to fetch live 2026 feed: {e}")
+        st.error(f"Failed to fetch live 2026 player feed: {e}")
         return pd.DataFrame()
 
 raw_data = load_live_2026_data()
@@ -37,7 +37,7 @@ if raw_data.empty:
     st.warning("No records found for the 2026 season yet. Stream syncing...")
     st.stop()
 
-# Filter regular season only
+# Filter regular season only for player stats
 if 'season_type' in raw_data.columns:
     filtered_data = raw_data[raw_data['season_type'].astype(str).str.upper() == 'REG'].copy()
 else:
@@ -106,21 +106,43 @@ with col1:
 
     st.markdown("---")
 
-    # 3. TEAM DEFENSE
+    # 3. TEAM DEFENSE (Clean Aggregation of Opponent Allowed Metrics)
     st.subheader("TEAM DEFENSE (2026)")
-    opp_col = 'opponent_team' if 'opponent_team' in filtered_data.columns else None
-    if opp_col:
-        def_agg = {'passing_yards': 'sum', 'passing_tds': 'sum', 'rushing_yards': 'sum', 'rushing_tds': 'sum', 'week': 'nunique'}
+    if 'opponent_team' in filtered_data.columns:
+        def_agg = {
+            'passing_yards': 'sum',
+            'passing_tds': 'sum',
+            'rushing_yards': 'sum',
+            'rushing_tds': 'sum'
+        }
         existing_agg = {k: v for k, v in def_agg.items() if k in filtered_data.columns}
-        def_df = filtered_data.groupby(opp_col).agg(existing_agg).reset_index()
+        def_df = filtered_data.groupby('opponent_team').agg(existing_agg).reset_index()
+        
+        if 'week' in filtered_data.columns:
+            gp_df = filtered_data.groupby('opponent_team')['week'].nunique().reset_index().rename(columns={'week': 'GP'})
+            def_df = def_df.merge(gp_df, on='opponent_team', how='left')
+        else:
+            def_df['GP'] = 1
+
         if not def_df.empty:
-            def_df = def_df.rename(columns={'passing_yards': 'PASS_YDS', 'passing_tds': 'PASS_TDS', 'rushing_yards': 'RUSH_YDS', 'rushing_tds': 'RUSH_TDS', 'week': 'GAMES'})
-            def_df['AVG_PASS_YDS'] = (def_df['PASS_YDS'] / def_df['GAMES']).round(1)
-            def_df['AVG_RUSH_YDS'] = (def_df['RUSH_YDS'] / def_df['GAMES']).round(1)
-            def_df['TOTAL_YDS'] = def_df['PASS_YDS'] + def_df['RUSH_YDS']
-            def_df['RANK'] = def_df['TOTAL_YDS'].rank(ascending=True, method='min').astype(int)
-            def_macro = def_df.sort_values(by='RANK', ascending=True)[[opp_col, 'AVG_PASS_YDS', 'PASS_TDS', 'AVG_RUSH_YDS', 'RUSH_TDS', 'RANK']]
+            def_df = def_df.rename(columns={
+                'opponent_team': 'TEAM',
+                'passing_yards': 'PASS_YDS',
+                'passing_tds': 'PASS_TDS',
+                'rushing_yards': 'RUSH_YDS',
+                'rushing_tds': 'RUSH_TDS'
+            })
+            
+            def_df['PASS YDS/G'] = (def_df['PASS_YDS'] / def_df['GP']).round(1)
+            def_df['RUSH YDS/G'] = (def_df['RUSH_YDS'] / def_df['GP']).round(1)
+            def_df['TOTAL YDS/G'] = ((def_df['PASS_YDS'] + def_df['RUSH_YDS']) / def_df['GP']).round(1)
+            def_df['RANK'] = def_df['TOTAL YDS/G'].rank(ascending=True, method='min').astype(int)
+            
+            def_macro = def_df.sort_values(by='RANK', ascending=True)[[
+                'TEAM', 'PASS YDS/G', 'PASS_TDS', 'RUSH YDS/G', 'RUSH_TDS', 'RANK'
+            ]]
             def_macro.columns = ['TEAM', 'PASS YDS/G', 'PASS TDS', 'RUSH YDS/G', 'RUSH TDS', 'RANK']
+            
             st.dataframe(def_macro, hide_index=True, height=320, use_container_width=True)
         else:
             st.info("Defense metrics unavailable.")
