@@ -6,7 +6,7 @@ import nflreadpy as nfl
 st.set_page_config(page_title="NFL Cluster Matrix Screener", layout="wide")
 
 st.title("🚀 NFL Performance Cluster Matrix")
-st.caption("Multi-position market intelligence dashboard — Live Terminal.")
+st.caption("Multi-position market intelligence dashboard — Live Terminal (2026 Season).")
 
 # ==========================================
 # SIDEBAR FILTERS (YEAR & SEASON TYPES)
@@ -26,8 +26,8 @@ use_pre = st.sidebar.checkbox("Pre-Season", value=False)
 use_reg = st.sidebar.checkbox("Regular Season", value=True)
 use_post = st.sidebar.checkbox("Playoffs", value=False)
 
-# Safe data loader using nflreadpy
-@st.cache_data
+# Data loader with ttl=21600 (refreshes cache automatically every 6 hours)
+@st.cache_data(ttl=21600)
 def load_nfl_data(year):
     try:
         df_polars = nfl.load_player_stats(seasons=[year])
@@ -41,7 +41,7 @@ def load_nfl_data(year):
 raw_data = load_nfl_data(selected_year)
 
 if raw_data.empty:
-    st.warning(f"No records found for the {selected_year} season yet.")
+    st.warning(f"No records found for the {selected_year} season yet. The live data stream may still be syncing.")
     st.stop()
 
 # Robust case-insensitive game type filtering
