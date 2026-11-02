@@ -5,7 +5,7 @@ import nflreadpy as nfl
 # Set wide layout for financial terminal style
 st.set_page_config(page_title="NFL Performance Cluster Matrix", layout="wide")
 
-st.title("🚀 NFL Performance Cluster Matrix")
+st.title("NFL Performance Cluster Matrix")
 st.caption("Live Market Intelligence Terminal — Active 2026 Regular Season Feed.")
 
 # Sidebar terminal control
