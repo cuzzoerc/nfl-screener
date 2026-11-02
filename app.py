@@ -1,5 +1,4 @@
 import streamlit as st
-import nfl_data_py as nfl
 import pandas as pd
 
 # Set wide layout to support the multi-box dashboard matrix
@@ -13,7 +12,7 @@ st.caption("Multi-position market intelligence dashboard — Real-time analytics
 # ==========================================
 st.sidebar.header("📊 Screener Parameters")
 
-# 1. YEAR FILTER
+# 1. YEAR FILTER (Supports current and prior seasons)
 selected_year = st.sidebar.selectbox(
     "Select Season Year", 
     [2026, 2025, 2024, 2023, 2022], 
@@ -28,11 +27,12 @@ use_pre = st.sidebar.checkbox("Pre-Season", value=False)
 use_reg = st.sidebar.checkbox("Regular Season", value=True)
 use_post = st.sidebar.checkbox("Playoffs", value=False)
 
-# Cached data loader for the selected season year
+# Direct data loader from nflverse-data releases
 @st.cache_data
 def load_nfl_data(year):
+    url = f"https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats_{year}.csv"
     try:
-        df = nfl.import_weekly_data([year])
+        df = pd.read_csv(url)
         return df
     except Exception as e:
         return pd.DataFrame()
@@ -40,7 +40,7 @@ def load_nfl_data(year):
 raw_data = load_nfl_data(selected_year)
 
 if raw_data.empty:
-    st.warning(f"No weekly data found for the {selected_year} season. Please select a different year from the sidebar.")
+    st.warning(f"No weekly data found for the {selected_year} season. Please select a different year or check if games have started.")
     st.stop()
 
 # Filter dataset by selected season types ('REG', 'POST', 'PRE')
