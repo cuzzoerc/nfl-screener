@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
-import nflreadpy as nfl
+import sportsdataverse.nfl as sdnfl
 
 # Set wide layout to support the multi-box dashboard matrix
 st.set_page_config(page_title="NFL Cluster Matrix Screener", layout="wide")
 
 st.title("🚀 NFL Performance Cluster Matrix")
-st.caption("Multi-position market intelligence dashboard — Live Terminal (2026 Season).")
+st.caption("Multi-position market intelligence dashboard — Live ESPN Terminal (2026 Season).")
 
 # ==========================================
 # SIDEBAR FILTERS (YEAR & SEASON TYPES)
@@ -26,22 +26,23 @@ use_pre = st.sidebar.checkbox("Pre-Season", value=False)
 use_reg = st.sidebar.checkbox("Regular Season", value=True)
 use_post = st.sidebar.checkbox("Playoffs", value=False)
 
-# Data loader with ttl=21600 (refreshes cache automatically every 6 hours)
-@st.cache_data(ttl=21600)
-def load_nfl_data(year):
+# Live data loader using sportsdataverse (ESPN backend) with short TTL for rapid freshness
+@st.cache_data(ttl=3600)  # Refreshes hourly or instantly when cleared
+def load_espn_nfl_data(year):
     try:
-        df_polars = nfl.load_player_stats(seasons=[year])
-        if df_polars is not None and not df_polars.is_empty():
-            return df_polars.to_pandas()
+        # Pulls live player stats dataframe directly from ESPN's ecosystem
+        df = sdnfl.load_nfl_player_stats(seasons=[year])
+        if df is not None and not df.empty:
+            return df
         return pd.DataFrame()
     except Exception as e:
-        st.error(f"Failed to fetch live feed: {e}")
+        st.error(f"Failed to fetch live ESPN feed: {e}")
         return pd.DataFrame()
 
-raw_data = load_nfl_data(selected_year)
+raw_data = load_espn_nfl_data(selected_year)
 
 if raw_data.empty:
-    st.warning(f"No records found for the {selected_year} season yet. The live data stream may still be syncing.")
+    st.warning(f"No records found for the {selected_year} season yet.")
     st.stop()
 
 # Robust case-insensitive game type filtering
@@ -83,12 +84,22 @@ with col1:
     if not qb_data.empty:
         qb_agg = {
             'completions': 'sum',
-            'attempts': 'sum',
+            'passing_attempts': 'sum',
             'passing_yards': 'sum',
             'passing_tds': 'sum',
-            'interceptions': 'sum'
+            interceptions='sum' if 'interceptions' in qb_data.columns else 'passing_interceptions'
         }
-        qb_macro = safe_agg(qb_data, 'player_display_name', qb_agg, 'passing_yards')
+        # Handle field name mappings safely
+        qb_agg_mapped = {}
+        for k, v in qb_agg.items():
+            if k in qb_data.columns:
+                qb_agg_mapped[k] = v
+            elif k == 'passing_attempts' and 'attempts' in qb_data.columns:
+                qb_agg_mapped['attempts'] = v
+            elif k == 'interceptions' and 'passing_interceptions' in qb_data.columns:
+                qb_agg_mapped['passing_interceptions'] = v
+
+        qb_macro = safe_agg(qb_data, 'player_display_name', qb_agg_mapped, list(qb_agg_mapped.keys())[2] if len(qb_agg_mapped)>2 else 'passing_yards')
         if not qb_macro.empty:
             qb_macro.columns = [c.upper() for c in qb_macro.columns]
             st.dataframe(qb_macro, hide_index=True, height=380, use_container_width=True)
@@ -103,13 +114,12 @@ with col1:
     st.subheader("RUNNING BACK")
     rb_data = filtered_data[filtered_data['position'] == 'RB'].copy()
     if not rb_data.empty:
-        td_key = 'touchdowns' if 'touchdowns' in rb_data.columns else ('rushing_tds' if 'rushing_tds' in rb_data.columns else 'receiving_tds')
         rb_agg = {
             'carries': 'sum',
             'rushing_yards': 'sum',
             'receptions': 'sum',
             'receiving_yards': 'sum',
-            td_key: 'sum'
+            'rushing_tds': 'sum'
         }
         rb_macro = safe_agg(rb_data, 'player_display_name', rb_agg, 'rushing_yards')
         if not rb_macro.empty:
@@ -124,7 +134,8 @@ with col1:
 
     # 3. TEAM DEFENSE BOX
     st.subheader("TEAM DEFENSE")
-    if 'opponent_team' in filtered_data.columns:
+    opp_col = 'opponent_team' if 'opponent_team' in filtered_data.columns else 'opp'
+    if opp_col in filtered_data.columns:
         def_agg = {
             'passing_yards': 'sum',
             'passing_tds': 'sum',
@@ -132,9 +143,10 @@ with col1:
             'rushing_tds': 'sum',
             'week': 'nunique'
         }
-        def_df = safe_agg(filtered_data, 'opponent_team', def_agg, 'passing_yards')
+        def_df = safe_agg(filtered_data, opp_col, def_agg, 'passing_yards')
         if not def_df.empty:
             def_df = def_df.rename(columns={
+                opp_col: 'team',
                 'passing_yards': 'pass_yds',
                 'passing_tds': 'pass_tds',
                 'rushing_yards': 'rush_yds',
@@ -148,7 +160,7 @@ with col1:
                 def_df['RANK'] = def_df['TOTAL_YDS'].rank(ascending=True, method='min').astype(int)
                 
                 def_macro = def_df.sort_values(by='RANK', ascending=True)[[
-                    'opponent_team', 'AVG_PASS_YDS', 'pass_tds', 'AVG_RUSH_YDS', 'rush_tds', 'RANK'
+                    'team', 'AVG_PASS_YDS', 'pass_tds', 'AVG_RUSH_YDS', 'rush_tds', 'RANK'
                 ]]
                 def_macro.columns = ['TEAM', 'PASS YDS/G', 'PASS TDS', 'RUSH YDS/G', 'RUSH TDS', 'RANK']
                 st.dataframe(def_macro, hide_index=True, height=380, use_container_width=True)
