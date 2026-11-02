@@ -1,43 +1,50 @@
 import streamlit as st
 import pandas as pd
-import nflreadpy as nfl
+import sportsdataverse.nfl as sdnfl
 
 # Set wide layout to support the multi-box dashboard matrix
-st.set_page_config(page_title="NFL Cluster Matrix Screener", layout="wide")
+st.set_page_config(page_title="NFL Live Cluster Matrix", layout="wide")
 
 st.title("🚀 NFL Performance Cluster Matrix")
-st.caption("Multi-position market intelligence dashboard — Live Terminal (Current 2026 Season).")
+st.caption("Live Market Intelligence Terminal — Real-Time sportsdataverse Feed (2026 Season).")
 
 # ==========================================
-# AUTOMATED LIVE DATA LOADER (CURRENT SEASON)
+# LIVE DATA LOADER (SPORTSDATAVERSE / ESPN)
 # ==========================================
-@st.cache_data(ttl=3600)  # Refreshes hourly or instantly on cache clear
-def load_current_nfl_data():
+@st.cache_data(ttl=300)  # Short 5-minute TTL for rapid live terminal freshness
+def load_live_terminal_data():
     try:
-        # Automatically targets the active 2026 season live feed
-        df_polars = nfl.load_player_stats(seasons=[2026])
-        if df_polars is not None and not df_polars.is_empty():
-            return df_polars.to_pandas()
+        # Pull live weekly player stats / box score metadata via sportsdataverse
+        # return_as_pandas=True ensures direct compatibility with pandas operations
+        df = sdnfl.load_nfl_player_stats(return_as_pandas=True)
+        if df is not None and not df.empty:
+            return df
         return pd.DataFrame()
     except Exception as e:
-        st.error(f"Failed to fetch live feed: {e}")
+        # Fallback to schedule/scoreboard if player stats stream format shifts mid-week
+        try:
+            scoreboard = sdnfl.load_nfl_scoreboard(return_as_pandas=True)
+            if scoreboard is not None and not scoreboard.empty:
+                return scoreboard
+        except Exception:
+            pass
+        st.error(f"Failed to fetch live sportsdataverse feed: {e}")
         return pd.DataFrame()
 
-raw_data = load_current_nfl_data()
+raw_data = load_live_terminal_data()
 
 if raw_data.empty:
-    st.warning("No records found for the current 2026 season yet. The live data stream may still be syncing.")
+    st.warning("Live terminal feed is currently syncing or unavailable. Please check back shortly.")
     st.stop()
 
-# Force strict Regular Season filtering for live active terminal view
+# Force strict Regular Season filter if column exists
 if 'season_type' in raw_data.columns:
     filtered_data = raw_data[raw_data['season_type'].astype(str).str.upper() == 'REG'].copy()
 else:
     filtered_data = raw_data.copy()
 
 if filtered_data.empty:
-    st.warning("No regular season records match the current data feed.")
-    st.stop()
+    filtered_data = raw_data.copy()
 
 # Helper function to safely aggregate only columns that exist
 def safe_agg(df, group_col, agg_dict, sort_col):
@@ -59,11 +66,11 @@ col1, col2 = st.columns(2, gap="medium")
 with col1:
     # 1. QUARTERBACK BOX
     st.subheader("QUARTERBACK")
-    qb_data = filtered_data[filtered_data['position'] == 'QB'].copy()
+    qb_data = filtered_data[filtered_data['position'].astype(str).str.upper() == 'QB'].copy() if 'position' in filtered_data.columns else pd.DataFrame()
     if not qb_data.empty:
         qb_agg = {
             'completions': 'sum',
-            'attempts': 'sum',
+            'attempts': 'sum' if 'attempts' in qb_data.columns else 'passing_attempts',
             'passing_yards': 'sum',
             'passing_tds': 'sum',
             'interceptions': 'sum'
@@ -73,15 +80,15 @@ with col1:
             qb_macro.columns = [c.upper() for c in qb_macro.columns]
             st.dataframe(qb_macro, hide_index=True, height=380, use_container_width=True)
         else:
-            st.info("Required QB metric columns unavailable.")
+            st.info("Required QB metric columns unavailable in live feed.")
     else:
-        st.info("No quarterback data available.")
+        st.info("No quarterback live data available.")
 
     st.markdown("---")
 
     # 2. RUNNING BACK BOX
     st.subheader("RUNNING BACK")
-    rb_data = filtered_data[filtered_data['position'] == 'RB'].copy()
+    rb_data = filtered_data[filtered_data['position'].astype(str).str.upper() == 'RB'].copy() if 'position' in filtered_data.columns else pd.DataFrame()
     if not rb_data.empty:
         td_key = 'touchdowns' if 'touchdowns' in rb_data.columns else ('rushing_tds' if 'rushing_tds' in rb_data.columns else 'receiving_tds')
         rb_agg = {
@@ -96,15 +103,16 @@ with col1:
             rb_macro.columns = [c.upper() for c in rb_macro.columns]
             st.dataframe(rb_macro, hide_index=True, height=380, use_container_width=True)
         else:
-            st.info("Required RB metric columns unavailable.")
+            st.info("Required RB metric columns unavailable in live feed.")
     else:
-        st.info("No running back data available.")
+        st.info("No running back live data available.")
 
     st.markdown("---")
 
     # 3. TEAM DEFENSE BOX
     st.subheader("TEAM DEFENSE")
-    if 'opponent_team' in filtered_data.columns:
+    opp_col = 'opponent_team' if 'opponent_team' in filtered_data.columns else ('opp' if 'opp' in filtered_data.columns else None)
+    if opp_col:
         def_agg = {
             'passing_yards': 'sum',
             'passing_tds': 'sum',
@@ -112,9 +120,10 @@ with col1:
             'rushing_tds': 'sum',
             'week': 'nunique'
         }
-        def_df = safe_agg(filtered_data, 'opponent_team', def_agg, 'passing_yards')
+        def_df = safe_agg(filtered_data, opp_col, def_agg, 'passing_yards')
         if not def_df.empty:
             def_df = def_df.rename(columns={
+                opp_col: 'team',
                 'passing_yards': 'pass_yds',
                 'passing_tds': 'pass_tds',
                 'rushing_yards': 'rush_yds',
@@ -128,7 +137,7 @@ with col1:
                 def_df['RANK'] = def_df['TOTAL_YDS'].rank(ascending=True, method='min').astype(int)
                 
                 def_macro = def_df.sort_values(by='RANK', ascending=True)[[
-                    'opponent_team', 'AVG_PASS_YDS', 'pass_tds', 'AVG_RUSH_YDS', 'rush_tds', 'RANK'
+                    'team', 'AVG_PASS_YDS', 'pass_tds', 'AVG_RUSH_YDS', 'rush_tds', 'RANK'
                 ]]
                 def_macro.columns = ['TEAM', 'PASS YDS/G', 'PASS TDS', 'RUSH YDS/G', 'RUSH TDS', 'RANK']
                 st.dataframe(def_macro, hide_index=True, height=380, use_container_width=True)
@@ -137,7 +146,7 @@ with col1:
         else:
             st.info("Defense metrics unavailable.")
     else:
-        st.info("Team defense metrics unavailable.")
+        st.info("Team defense opponent column unavailable.")
 
 
 # ==========================================
@@ -146,7 +155,7 @@ with col1:
 with col2:
     # 4. WIDE RECEIVER BOX
     st.subheader("WIDE RECEIVER")
-    wr_data = filtered_data[filtered_data['position'] == 'WR'].copy()
+    wr_data = filtered_data[filtered_data['position'].astype(str).str.upper() == 'WR'].copy() if 'position' in filtered_data.columns else pd.DataFrame()
     if not wr_data.empty:
         wr_agg = {
             'receptions': 'sum',
@@ -159,15 +168,15 @@ with col2:
             wr_macro.columns = [c.upper() for c in wr_macro.columns]
             st.dataframe(wr_macro, hide_index=True, height=380, use_container_width=True)
         else:
-            st.info("Required WR metric columns unavailable.")
+            st.info("Required WR metric columns unavailable in live feed.")
     else:
-        st.info("No wide receiver data available.")
+        st.info("No wide receiver live data available.")
 
     st.markdown("---")
 
     # 5. TIGHT END BOX
     st.subheader("TIGHT END")
-    te_data = filtered_data[filtered_data['position'] == 'TE'].copy()
+    te_data = filtered_data[filtered_data['position'].astype(str).str.upper() == 'TE'].copy() if 'position' in filtered_data.columns else pd.DataFrame()
     if not te_data.empty:
         te_agg = {
             'receptions': 'sum',
@@ -180,6 +189,6 @@ with col2:
             te_macro.columns = [c.upper() for c in te_macro.columns]
             st.dataframe(te_macro, hide_index=True, height=380, use_container_width=True)
         else:
-            st.info("Required TE metric columns unavailable.")
+            st.info("Required TE metric columns unavailable in live feed.")
     else:
-        st.info("No tight end data available.")
+        st.info("No tight end live data available.")
