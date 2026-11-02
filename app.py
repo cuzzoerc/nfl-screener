@@ -27,10 +27,9 @@ use_reg = st.sidebar.checkbox("Regular Season", value=True)
 use_post = st.sidebar.checkbox("Playoffs", value=False)
 
 # Live data loader using sportsdataverse (ESPN backend) with short TTL for rapid freshness
-@st.cache_data(ttl=3600)  # Refreshes hourly or instantly when cleared
+@st.cache_data(ttl=3600)
 def load_espn_nfl_data(year):
     try:
-        # Pulls live player stats dataframe directly from ESPN's ecosystem
         df = sdnfl.load_nfl_player_stats(seasons=[year])
         if df is not None and not df.empty:
             return df
@@ -82,24 +81,26 @@ with col1:
     st.subheader("QUARTERBACK")
     qb_data = filtered_data[filtered_data['position'] == 'QB'].copy()
     if not qb_data.empty:
-        qb_agg = {
-            'completions': 'sum',
-            'passing_attempts': 'sum',
-            'passing_yards': 'sum',
-            'passing_tds': 'sum',
-            interceptions='sum' if 'interceptions' in qb_data.columns else 'passing_interceptions'
-        }
-        # Handle field name mappings safely
-        qb_agg_mapped = {}
-        for k, v in qb_agg.items():
-            if k in qb_data.columns:
-                qb_agg_mapped[k] = v
-            elif k == 'passing_attempts' and 'attempts' in qb_data.columns:
-                qb_agg_mapped['attempts'] = v
-            elif k == 'interceptions' and 'passing_interceptions' in qb_data.columns:
-                qb_agg_mapped['passing_interceptions'] = v
+        # Build safe dynamic dictionary for QB stats
+        qb_agg = {'completions': 'sum'}
+        if 'attempts' in qb_data.columns:
+            qb_agg['attempts'] = 'sum'
+        elif 'passing_attempts' in qb_data.columns:
+            qb_agg['passing_attempts'] = 'sum'
+            
+        if 'passing_yards' in qb_data.columns:
+            qb_agg['passing_yards'] = 'sum'
+        if 'passing_tds' in qb_data.columns:
+            qb_agg['passing_tds'] = 'sum'
+            
+        if 'interceptions' in qb_data.columns:
+            qb_agg['interceptions'] = 'sum'
+        elif 'passing_interceptions' in qb_data.columns:
+            qb_agg['passing_interceptions'] = 'sum'
 
-        qb_macro = safe_agg(qb_data, 'player_display_name', qb_agg_mapped, list(qb_agg_mapped.keys())[2] if len(qb_agg_mapped)>2 else 'passing_yards')
+        sort_field = 'passing_yards' if 'passing_yards' in qb_agg else 'completions'
+        qb_macro = safe_agg(qb_data, 'player_display_name', qb_agg, sort_field)
+        
         if not qb_macro.empty:
             qb_macro.columns = [c.upper() for c in qb_macro.columns]
             st.dataframe(qb_macro, hide_index=True, height=380, use_container_width=True)
