@@ -31,7 +31,27 @@ def load_live_2026_data():
         st.error(f"Failed to fetch live 2026 player feed: {e}")
         return pd.DataFrame()
 
+# Direct scraper for ESPN's public Team Defense table
+@st.cache_data(ttl=300)
+def fetch_espn_defense_table():
+    try:
+        url = "https://www.espn.com/nfl/stats/team/_/view/defense/season/2026/seasontype/2"
+        # pandas read_html grabs HTML tables from the public URL
+        tables = pd.read_html(url)
+        if len(tables) >= 2:
+            # ESPN splits the table into table[0] (Teams) and table[1] (Stats)
+            team_col = tables[0]
+            stat_col = tables[1]
+            espn_df = pd.concat([team_col, stat_col], axis=1)
+            return espn_df
+        elif len(tables) == 1:
+            return tables[0]
+        return pd.DataFrame()
+    except Exception as e:
+        return pd.DataFrame()
+
 raw_data = load_live_2026_data()
+espn_def_df = fetch_espn_defense_table()
 
 if raw_data.empty:
     st.warning("No records found for the 2026 season yet. Stream syncing...")
@@ -106,48 +126,12 @@ with col1:
 
     st.markdown("---")
 
-    # 3. TEAM DEFENSE (Clean Aggregation of Opponent Allowed Metrics)
+    # 3. TEAM DEFENSE (Directly scraped from ESPN public web page)
     st.subheader("TEAM DEFENSE (2026)")
-    if 'opponent_team' in filtered_data.columns:
-        def_agg = {
-            'passing_yards': 'sum',
-            'passing_tds': 'sum',
-            'rushing_yards': 'sum',
-            'rushing_tds': 'sum'
-        }
-        existing_agg = {k: v for k, v in def_agg.items() if k in filtered_data.columns}
-        def_df = filtered_data.groupby('opponent_team').agg(existing_agg).reset_index()
-        
-        if 'week' in filtered_data.columns:
-            gp_df = filtered_data.groupby('opponent_team')['week'].nunique().reset_index().rename(columns={'week': 'GP'})
-            def_df = def_df.merge(gp_df, on='opponent_team', how='left')
-        else:
-            def_df['GP'] = 1
-
-        if not def_df.empty:
-            def_df = def_df.rename(columns={
-                'opponent_team': 'TEAM',
-                'passing_yards': 'PASS_YDS',
-                'passing_tds': 'PASS_TDS',
-                'rushing_yards': 'RUSH_YDS',
-                'rushing_tds': 'RUSH_TDS'
-            })
-            
-            def_df['PASS YDS/G'] = (def_df['PASS_YDS'] / def_df['GP']).round(1)
-            def_df['RUSH YDS/G'] = (def_df['RUSH_YDS'] / def_df['GP']).round(1)
-            def_df['TOTAL YDS/G'] = ((def_df['PASS_YDS'] + def_df['RUSH_YDS']) / def_df['GP']).round(1)
-            def_df['RANK'] = def_df['TOTAL YDS/G'].rank(ascending=True, method='min').astype(int)
-            
-            def_macro = def_df.sort_values(by='RANK', ascending=True)[[
-                'TEAM', 'PASS YDS/G', 'PASS_TDS', 'RUSH YDS/G', 'RUSH_TDS', 'RANK'
-            ]]
-            def_macro.columns = ['TEAM', 'PASS YDS/G', 'PASS TDS', 'RUSH YDS/G', 'RUSH TDS', 'RANK']
-            
-            st.dataframe(def_macro, hide_index=True, height=320, use_container_width=True)
-        else:
-            st.info("Defense metrics unavailable.")
+    if not espn_def_df.empty:
+        st.dataframe(espn_def_df, hide_index=True, height=320, use_container_width=True)
     else:
-        st.info("Defense opponent column missing.")
+        st.info("Awaiting live ESPN defense web sync...")
 
 with col2:
     # 4. WIDE RECEIVER
