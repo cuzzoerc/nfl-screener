@@ -2,3 +2,4 @@ streamlit
 pandas
 polars
 sportsdataverse
+nflreadpy
