@@ -58,7 +58,7 @@ default_odds_key = st.secrets.get("ODDS_API_KEY", "") if hasattr(st, "secrets") 
 odds_api_key = st.sidebar.text_input("The Odds API Key", value=default_odds_key, type="password")
 
 # ==========================================
-# --- 2026 DATA LOADERS (ANTI-CRASH) ---
+# --- 2026 DATA LOADERS (SCHEMA-HARDENED) ---
 # ==========================================
 @st.cache_data(ttl=300)
 def load_all_2026_feeds():
@@ -79,6 +79,24 @@ def load_all_2026_feeds():
                 df = df[df["season"] == 2026]
             if "season_type" in df.columns:
                 df = df[df["season_type"].astype(str).str.upper() == "REG"]
+
+            # Normalize nflreadpy vs nfl_data_py schema column names
+            if "recent_team" not in df.columns:
+                if "team" in df.columns:
+                    df["recent_team"] = df["team"]
+                elif "posteam" in df.columns:
+                    df["recent_team"] = df["posteam"]
+                else:
+                    df["recent_team"] = "UNK"
+
+            if "player_display_name" not in df.columns:
+                if "player_name" in df.columns:
+                    df["player_display_name"] = df["player_name"]
+                elif "player" in df.columns:
+                    df["player_display_name"] = df["player"]
+                else:
+                    df["player_display_name"] = "UNKNOWN"
+
             data["stats"] = df
     except Exception as e:
         st.error(f"Player stats feed error: {e}")
@@ -105,6 +123,8 @@ def load_all_2026_feeds():
                 sndf = sndf[sndf["season"] == 2026]
             if "game_type" in sndf.columns:
                 sndf = sndf[sndf["game_type"].astype(str).str.upper() == "REG"]
+            if "player" not in sndf.columns and "player_display_name" in sndf.columns:
+                sndf["player"] = sndf["player_display_name"]
             data["snaps"] = sndf
     except Exception:
         pass
@@ -118,13 +138,11 @@ def load_all_2026_feeds():
                 (pl.col("play_type").is_in(["pass", "run"])) &
                 (pl.col("epa").is_not_null())
             )
-            # Neutral script filter: Win Probability between 5% and 95%
             if "wp" in pbp_reg.columns:
                 pbp_neutral = pbp_reg.filter((pl.col("wp") >= 0.05) & (pl.col("wp") <= 0.95))
             else:
                 pbp_neutral = pbp_reg
 
-            # Offensive Efficiency
             off_agg = (
                 pbp_neutral.group_by("posteam")
                 .agg([
@@ -139,7 +157,6 @@ def load_all_2026_feeds():
             )
             data["team_eff"] = off_agg
 
-            # Defensive Efficiency (Neutral Script)
             def_agg = (
                 pbp_neutral.group_by("defteam")
                 .agg([
@@ -213,7 +230,7 @@ if stats_df.empty:
 # ==========================================
 # --- MERGE SNAP COUNTS & COMPUTE VOLATILITY ---
 # ==========================================
-if not snaps_df.empty and {"player", "team", "week", "offense_pct"}.issubset(snaps_df.columns):
+if not snaps_df.empty and {"player", "team", "week", "offense_pct"}.issubset(snaps_df.columns) and "week" in stats_df.columns:
     snaps_clean = snaps_df[["player", "team", "week", "offense_pct"]].copy()
     snaps_clean["join_name"] = snaps_clean["player"].astype(str).str.upper().str.strip()
     snaps_clean["join_team"] = snaps_clean["team"].astype(str).str.upper().str.strip()
@@ -248,7 +265,9 @@ def remove_vig(over_odds: float, under_odds: float):
     return (p_o / total), (p_u / total)
 
 def compute_player_volatility_profile(p_logs: pd.DataFrame, target_col: str):
-    p_sorted = p_logs.sort_values(by="week", ascending=False)
+    if target_col not in p_logs.columns:
+        return 0.0, 0.0, 0.0, 0.0, "NO DATA"
+    p_sorted = p_logs.sort_values(by="week", ascending=False) if "week" in p_logs.columns else p_logs
     vals = p_sorted[target_col].dropna().values
     if len(vals) == 0:
         return 0.0, 0.0, 0.0, 0.0, "NO DATA"
@@ -257,7 +276,6 @@ def compute_player_volatility_profile(p_logs: pd.DataFrame, target_col: str):
     l5_vals = vals[:5]
     l5_mean = float(np.mean(l5_vals))
     l5_median = float(np.median(l5_vals))
-    # Player ATR = Rolling Standard Deviation (floored at 15% of mean to avoid zero-variance artifacts)
     raw_std = float(np.std(l5_vals, ddof=1)) if len(l5_vals) > 1 else season_mean * 0.25
     player_atr = max(raw_std, season_mean * 0.15, 1.0)
 
@@ -275,10 +293,12 @@ def build_position_cluster_table(pos_df: pd.DataFrame, base_agg: dict, target_me
     if "SNAP_PCT" in pos_df.columns:
         valid_agg["SNAP_PCT"] = "mean"
 
+    if not valid_agg:
+        return pd.DataFrame()
+
     grouped = pos_df.groupby(["player_display_name", "recent_team"], as_index=False).agg(valid_agg)
     grouped = grouped.rename(columns={"week": "G", "recent_team": "TEAM", "player_display_name": "PLAYER"})
 
-    # Compute L5 Mean & Player ATR (Std Dev) per player
     l5_means, player_atrs, regimes = [], [], []
     for _, row in grouped.iterrows():
         p_sub = pos_df[pos_df["player_display_name"] == row["PLAYER"]]
@@ -321,12 +341,13 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     st.subheader("Stage 0 Macro Environment, Odds & Weather Gates")
 
-    if sched_df.empty:
+    if sched_df.empty or "week" not in sched_df.columns:
         st.info("2026 schedule feed unavailable.")
     else:
-        unplayed = sched_df[sched_df["result"].isna()] if "result" in sched_df.columns else pd.DataFrame()
         available_weeks = sorted(sched_df["week"].dropna().unique().astype(int).tolist())
-        default_week = int(unplayed["week"].min()) if not unplayed.empty else max(available_weeks)
+        unplayed = sched_df[sched_df["result"].isna()] if "result" in sched_df.columns else pd.DataFrame()
+        valid_unplayed_weeks = unplayed["week"].dropna() if not unplayed.empty else pd.Series(dtype=int)
+        default_week = int(valid_unplayed_weeks.min()) if not valid_unplayed_weeks.empty else max(available_weeks)
 
         selected_week = st.selectbox("Select NFL Week", options=available_weeks, index=available_weeks.index(default_week))
         week_games = sched_df[sched_df["week"] == selected_week].copy()
@@ -335,7 +356,7 @@ with tab1:
         for _, g in week_games.iterrows():
             home = g.get("home_team", "")
             away = g.get("away_team", "")
-            spread = g.get("spread_line", np.nan)  # In nflverse, positive spread_line = home favored by X
+            spread = g.get("spread_line", np.nan)
             total = g.get("total_line", np.nan)
             roof = str(g.get("roof", "outdoors")).upper()
             wind = g.get("wind", np.nan)
@@ -343,14 +364,12 @@ with tab1:
             h_rest = g.get("home_rest", 7)
             a_rest = g.get("away_rest", 7)
 
-            # Implied Team Totals
             if pd.notna(total) and pd.notna(spread):
                 home_imp = round((total + spread) / 2.0, 1)
                 away_imp = round((total - spread) / 2.0, 1)
             else:
                 home_imp, away_imp = np.nan, np.nan
 
-            # Stage 0 Gate Evaluation
             is_dome = roof in ["DOME", "CLOSED"]
             wind_val = 0.0 if is_dome else (float(wind) if pd.notna(wind) else 0.0)
             temp_val = 70.0 if is_dome else (float(temp) if pd.notna(temp) else 65.0)
@@ -380,7 +399,6 @@ with tab1:
         slate_display = pd.DataFrame(slate_rows)
         st.dataframe(slate_display, hide_index=True, use_container_width=True)
 
-        # Optional Live Sportsbook Feed
         if odds_api_key:
             st.markdown("#### Live Sportsbook Order Book (The Odds API)")
             live_odds_df = fetch_live_odds(odds_api_key)
@@ -423,14 +441,14 @@ with tab2:
     }
     target_stat = metric_map[pos_code]
 
-    pos_pool = stats_df[stats_df["position"].astype(str).str.upper() == pos_code].copy()
-    player_names = sorted(pos_pool["player_display_name"].dropna().unique().tolist())
+    pos_pool = stats_df[stats_df["position"].astype(str).str.upper() == pos_code].copy() if "position" in stats_df.columns else pd.DataFrame()
+    player_names = sorted(pos_pool["player_display_name"].dropna().unique().tolist()) if not pos_pool.empty else []
 
     with c2:
-        calc_player = st.selectbox("2. Select Player", options=player_names)
+        calc_player = st.selectbox("2. Select Player", options=player_names if player_names else ["No Players Available"])
     with c3:
         all_teams = sorted(stats_df["recent_team"].dropna().unique().tolist())
-        calc_opp = st.selectbox("3. Upcoming Opponent", options=all_teams)
+        calc_opp = st.selectbox("3. Upcoming Opponent", options=all_teams if all_teams else ["N/A"])
 
     m1, m2, m3, m4 = st.columns(4)
     with m1:
@@ -442,14 +460,14 @@ with tab2:
     with m4:
         opp_odds = st.number_input("7. Opposing Side Odds", min_value=-500, max_value=500, value=-110, step=5)
 
-    if calc_player:
-        p_history = pos_pool[pos_pool["player_display_name"] == calc_player].sort_values(by="week", ascending=False)
+    if calc_player and calc_player != "No Players Available":
+        p_history = pos_pool[pos_pool["player_display_name"] == calc_player]
+        if "week" in p_history.columns:
+            p_history = p_history.sort_values(by="week", ascending=False)
         s_mean, l5_mean, l5_med, p_atr, vol_regime = compute_player_volatility_profile(p_history, target_stat)
         avg_snap = float(p_history["SNAP_PCT"].head(3).mean()) if "SNAP_PCT" in p_history.columns and p_history["SNAP_PCT"].notna().any() else 75.0
 
-        # Matchup Funnel Adjustment (Opponent Defensive EPA vs League Average)
         funnel_adj = 0.0
-        opp_def_epa = 0.0
         if not def_eff_df.empty and calc_opp in def_eff_df["defteam"].values:
             opp_row = def_eff_df[def_eff_df["defteam"] == calc_opp].iloc[0]
             if pos_code in ["QB", "WR", "TE"]:
@@ -458,15 +476,12 @@ with tab2:
             else:
                 opp_def_epa = float(opp_row["DEF_RUSH_EPA"])
                 lg_avg_epa = float(def_eff_df["DEF_RUSH_EPA"].mean())
-            # Positive DEF EPA means bad defense (yields more yards); scale adjustment by +/- 0.35 ATR max
             epa_delta = opp_def_epa - lg_avg_epa
             funnel_adj = np.clip(epa_delta * 2.5, -0.35, 0.35) * p_atr
 
-        # Model Fair Projection (60% Recent L5 + 40% Season Baseline + Matchup Funnel)
         raw_proj = (0.60 * l5_mean) + (0.40 * s_mean) + funnel_adj
         fair_proj = round(raw_proj, 1)
 
-        # Continuous Probability Calculation via Normal CDF
         z_score = (book_line - fair_proj) / p_atr
         prob_over = float(1.0 - norm.cdf(z_score))
         prob_under = float(norm.cdf(z_score))
@@ -476,21 +491,15 @@ with tab2:
         book_novig_prob = novig_over if bet_side == "OVER" else novig_under
         edge_pct = (model_prob - book_novig_prob) * 100.0
 
-        # CQS Sub-Scores (0 to 100)
-        # 1. Efficiency / Edge Score (35%)
         s_eff = np.clip((edge_pct / 10.0) * 100.0, 0.0, 100.0)
-        # 2. Volatility Coil Score (30%) - tighter ATR yields higher reliability
         cv_ratio = p_atr / max(l5_mean, 1.0)
         s_coil = np.clip(((0.45 - cv_ratio) / 0.25) * 100.0, 0.0, 100.0)
-        # 3. Matchup Runway Score (25%)
         s_runway = np.clip(50.0 + (funnel_adj / max(p_atr, 1.0)) * 140.0, 0.0, 100.0)
-        # 4. Snap Liquidity Score (10%)
         snap_req = min_snap_rb if pos_code == "RB" else min_snap_skill
         s_liq = 100.0 if avg_snap >= snap_req else 0.0
 
         cqs_score = round((0.35 * s_eff) + (0.30 * s_coil) + (0.25 * s_runway) + (0.10 * s_liq), 1)
 
-        # Gate Evaluation & R-Unit Tiering
         liquidity_ok = avg_snap >= snap_req
         gate_label = "LOCKOUT: NO EDGE"
         r_tier = 0.0
@@ -532,12 +541,19 @@ with tab2:
 with tab3:
     def render_upgraded_section(title, pos_code_str, stat_dict, target_col, sort_col, log_cols):
         st.subheader(title)
+        if "position" not in stats_df.columns:
+            st.info("Position column unavailable.")
+            return
         sub_df = stats_df[stats_df["position"].astype(str).str.upper() == pos_code_str].copy()
         if sub_df.empty:
             st.info("No data available.")
             return
 
         cluster_df = build_position_cluster_table(sub_df, stat_dict, target_col, sort_col)
+        if cluster_df.empty:
+            st.info("Insufficient columns to build cluster matrix.")
+            return
+
         disp = cluster_df.copy()
         disp.columns = [c.replace("_", " ").upper() for c in disp.columns]
         st.dataframe(disp, hide_index=True, height=340, use_container_width=True)
@@ -545,7 +561,10 @@ with tab3:
         p_list = cluster_df["PLAYER"].tolist()
         sel_p = st.selectbox(f"Inspect Last 5 Game Logs ({title})", ["-- Select Player --"] + p_list, key=f"log_{pos_code_str}")
         if sel_p != "-- Select Player --":
-            logs = sub_df[sub_df["player_display_name"] == sel_p].sort_values(by="week", ascending=False).head(5)
+            logs = sub_df[sub_df["player_display_name"] == sel_p]
+            if "week" in logs.columns:
+                logs = logs.sort_values(by="week", ascending=False)
+            logs = logs.head(5)
             valid_cols = [c for c in log_cols if c in logs.columns]
             l_disp = logs[valid_cols].copy()
             for sc in ["target_share", "air_yards_share"]:
@@ -602,57 +621,61 @@ with tab4:
     st.caption("Ranked by Per-Game Yardage & Neutral-Script EPA/Play Allowed (Bye-Week Distortion Removed).")
 
     if "opponent_team" in stats_df.columns:
-        def_base = stats_df.groupby("opponent_team", as_index=False).agg({
+        def_candidates = {
             "passing_yards": "sum",
             "passing_tds": "sum",
             "rushing_yards": "sum",
             "rushing_tds": "sum",
             "week": "nunique"
-        }).rename(columns={"opponent_team": "TEAM", "week": "GAMES"})
+        }
+        valid_def_agg = {k: v for k, v in def_candidates.items() if k in stats_df.columns}
+        def_base = stats_df.groupby("opponent_team", as_index=False).agg(valid_def_agg).rename(columns={"opponent_team": "TEAM", "week": "GAMES"})
 
-        def_base["PASS_YDS_G"] = (def_base["passing_yards"] / def_base["GAMES"]).round(1)
-        def_base["RUSH_YDS_G"] = (def_base["rushing_yards"] / def_base["GAMES"]).round(1)
-        def_base["TOTAL_YDS_G"] = (def_base["PASS_YDS_G"] + def_base["RUSH_YDS_G"]).round(1)
-        def_base["YDS_RANK"] = def_base["TOTAL_YDS_G"].rank(ascending=True, method="min").astype(int)
+        if {"passing_yards", "rushing_yards", "GAMES"}.issubset(def_base.columns):
+            def_base["PASS_YDS_G"] = (def_base["passing_yards"] / def_base["GAMES"]).round(1)
+            def_base["RUSH_YDS_G"] = (def_base["rushing_yards"] / def_base["GAMES"]).round(1)
+            def_base["TOTAL_YDS_G"] = (def_base["PASS_YDS_G"] + def_base["RUSH_YDS_G"]).round(1)
+            def_base["YDS_RANK"] = def_base["TOTAL_YDS_G"].rank(ascending=True, method="min").astype(int)
 
-        if not def_eff_df.empty:
-            def_merged = pd.merge(def_base, def_eff_df, left_on="TEAM", right_on="defteam", how="left")
-            def_merged["DEF_PASS_EPA"] = def_merged["DEF_PASS_EPA"].round(3)
-            def_merged["DEF_RUSH_EPA"] = def_merged["DEF_RUSH_EPA"].round(3)
-            def_merged["DEF_PASS_SUCC"] = (def_merged["DEF_PASS_SUCC"] * 100.0).round(1)
-            def_merged["DEF_RUSH_SUCC"] = (def_merged["DEF_RUSH_SUCC"] * 100.0).round(1)
+            if not def_eff_df.empty:
+                def_merged = pd.merge(def_base, def_eff_df, left_on="TEAM", right_on="defteam", how="left")
+                def_merged["DEF_PASS_EPA"] = def_merged["DEF_PASS_EPA"].round(3)
+                def_merged["DEF_RUSH_EPA"] = def_merged["DEF_RUSH_EPA"].round(3)
+                def_merged["DEF_PASS_SUCC"] = (def_merged["DEF_PASS_SUCC"] * 100.0).round(1)
+                def_merged["DEF_RUSH_SUCC"] = (def_merged["DEF_RUSH_SUCC"] * 100.0).round(1)
 
-            # Classify Matchup Funnel (Overhead Runway Indicator)
-            def classify_funnel(r):
-                p_epa = r.get("DEF_PASS_EPA", 0.0)
-                r_epa = r.get("DEF_RUSH_EPA", 0.0)
-                if pd.isna(p_epa) or pd.isna(r_epa):
+                def classify_funnel(r):
+                    p_epa = r.get("DEF_PASS_EPA", 0.0)
+                    r_epa = r.get("DEF_RUSH_EPA", 0.0)
+                    if pd.isna(p_epa) or pd.isna(r_epa):
+                        return "BALANCED"
+                    if p_epa > 0.06 and p_epa > (r_epa + 0.08):
+                        return "PASS FUNNEL (TARGET WR/QB)"
+                    elif r_epa > 0.02 and r_epa > (p_epa + 0.08):
+                        return "RUN FUNNEL (TARGET RB)"
+                    elif p_epa < -0.05 and r_epa < -0.08:
+                        return "ELITE LOCKDOWN (AVOID)"
                     return "BALANCED"
-                if p_epa > 0.06 and p_epa > (r_epa + 0.08):
-                    return "PASS FUNNEL (TARGET WR/QB)"
-                elif r_epa > 0.02 and r_epa > (p_epa + 0.08):
-                    return "RUN FUNNEL (TARGET RB)"
-                elif p_epa < -0.05 and r_epa < -0.08:
-                    return "ELITE LOCKDOWN (AVOID)"
-                return "BALANCED"
 
-            def_merged["FUNNEL_PROFILE"] = def_merged.apply(classify_funnel, axis=1)
-            def_merged = def_merged.sort_values(by="DEF_TOTAL_EPA", ascending=True)
+                def_merged["FUNNEL_PROFILE"] = def_merged.apply(classify_funnel, axis=1)
+                def_merged = def_merged.sort_values(by="DEF_TOTAL_EPA", ascending=True)
 
-            final_cols = [
-                "TEAM", "GAMES", "TOTAL_YDS_G", "YDS_RANK",
-                "PASS_YDS_G", "DEF_PASS_EPA", "DEF_PASS_SUCC",
-                "RUSH_YDS_G", "DEF_RUSH_EPA", "DEF_RUSH_SUCC", "FUNNEL_PROFILE"
-            ]
-            def_disp = def_merged[final_cols].copy()
-            def_disp.columns = [
-                "TEAM", "G", "TOT YDS/G", "YDS RK",
-                "PASS YDS/G", "PASS EPA/P", "PASS SUCC %",
-                "RUSH YDS/G", "RUSH EPA/P", "RUSH SUCC %", "MATCHUP FUNNEL"
-            ]
-            st.dataframe(def_disp, hide_index=True, height=520, use_container_width=True)
+                final_cols = [
+                    "TEAM", "GAMES", "TOTAL_YDS_G", "YDS_RANK",
+                    "PASS_YDS_G", "DEF_PASS_EPA", "DEF_PASS_SUCC",
+                    "RUSH_YDS_G", "DEF_RUSH_EPA", "DEF_RUSH_SUCC", "FUNNEL_PROFILE"
+                ]
+                def_disp = def_merged[final_cols].copy()
+                def_disp.columns = [
+                    "TEAM", "G", "TOT YDS/G", "YDS RK",
+                    "PASS YDS/G", "PASS EPA/P", "PASS SUCC %",
+                    "RUSH YDS/G", "RUSH EPA/P", "RUSH SUCC %", "MATCHUP FUNNEL"
+                ]
+                st.dataframe(def_disp, hide_index=True, height=520, use_container_width=True)
+            else:
+                def_base = def_base.sort_values(by="YDS_RANK", ascending=True)
+                st.dataframe(def_base, hide_index=True, height=520, use_container_width=True)
         else:
-            def_base = def_base.sort_values(by="YDS_RANK", ascending=True)
             st.dataframe(def_base, hide_index=True, height=520, use_container_width=True)
     else:
         st.info("Defense opponent column missing.")
