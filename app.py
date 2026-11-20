@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 import pandas as pd
 import polars as pl
@@ -13,20 +14,67 @@ st.set_page_config(page_title="NFL Syndicate Execution Terminal", layout="wide")
 
 st.markdown("""
 <style>
-    .metric-card {
-        background-color: #0e1117;
-        border: 1px solid #262730;
-        padding: 12px 16px;
-        border-radius: 6px;
+    div[data-testid="stMetricValue"] {
+        font-size: 1.45rem !important;
     }
-    .gate-pass { background-color: #1b4332; color: #74c69d; padding: 4px 10px; border-radius: 4px; font-weight: 700; }
-    .gate-caution { background-color: #663c00; color: #ffb703; padding: 4px 10px; border-radius: 4px; font-weight: 700; }
-    .gate-lockout { background-color: #590d22; color: #ff758f; padding: 4px 10px; border-radius: 4px; font-weight: 700; }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("NFL Syndicate Execution Terminal")
 st.caption("Closed-Loop Quantitative Market Intelligence — 2026 Regular Season Feed")
+
+# ==========================================
+# --- STADIUM COORDINATES & ROOF METADATA ---
+# ==========================================
+NFL_STADIUMS = {
+    "ARI": (33.5276, -112.2626, "DOME"),
+    "ATL": (33.7554, -84.4008, "DOME"),
+    "BAL": (39.2780, -76.6227, "OUTDOORS"),
+    "BUF": (42.7738, -78.7870, "OUTDOORS"),
+    "CAR": (35.2258, -80.8528, "OUTDOORS"),
+    "CHI": (41.8623, -87.6167, "OUTDOORS"),
+    "CIN": (39.0955, -84.5161, "OUTDOORS"),
+    "CLE": (41.5061, -81.6995, "OUTDOORS"),
+    "DAL": (32.7473, -97.0945, "DOME"),
+    "DEN": (39.7439, -105.0201, "OUTDOORS"),
+    "DET": (42.3400, -83.0456, "DOME"),
+    "GB":  (44.5013, -88.0622, "OUTDOORS"),
+    "HOU": (29.6847, -95.4107, "DOME"),
+    "IND": (39.7601, -86.1639, "DOME"),
+    "JAX": (30.3239, -81.6373, "OUTDOORS"),
+    "KC":  (39.0489, -94.4839, "OUTDOORS"),
+    "LA":  (33.9535, -118.3392, "DOME"),
+    "LAR": (33.9535, -118.3392, "DOME"),
+    "LAC": (33.9535, -118.3392, "DOME"),
+    "LV":  (36.0909, -115.1833, "DOME"),
+    "MIA": (25.9580, -80.2389, "OUTDOORS"),
+    "MIN": (44.9736, -93.2575, "DOME"),
+    "NE":  (42.0909, -71.2643, "OUTDOORS"),
+    "NO":  (29.9511, -90.0812, "DOME"),
+    "NYG": (40.8128, -74.0742, "OUTDOORS"),
+    "NYJ": (40.8128, -74.0742, "OUTDOORS"),
+    "PHI": (39.9008, -75.1675, "OUTDOORS"),
+    "PIT": (40.4468, -80.0158, "OUTDOORS"),
+    "SEA": (47.5952, -122.3316, "OUTDOORS"),
+    "SF":  (37.4033, -121.9694, "OUTDOORS"),
+    "TB":  (27.9759, -82.5033, "OUTDOORS"),
+    "TEN": (36.1665, -86.7713, "OUTDOORS"),
+    "WAS": (38.9076, -76.8645, "OUTDOORS"),
+}
+
+TEAM_NAME_TO_ABBR = {
+    "ARIZONA CARDINALS": "ARI", "ATLANTA FALCONS": "ATL", "BALTIMORE RAVENS": "BAL",
+    "BUFFALO BILLS": "BUF", "CAROLINA PANTHERS": "CAR", "CHICAGO BEARS": "CHI",
+    "CINCINNATI BENGALS": "CIN", "CLEVELAND BROWNS": "CLE", "DALLAS COWBOYS": "DAL",
+    "DENVER BRONCOS": "DEN", "DETROIT LIONS": "DET", "GREEN BAY PACKERS": "GB",
+    "HOUSTON TEXANS": "HOU", "INDIANAPOLIS COLTS": "IND", "JACKSONVILLE JAGUARS": "JAX",
+    "KANSAS CITY CHIEFS": "KC", "LAS VEGAS RAIDERS": "LV", "LOS ANGELES CHARGERS": "LAC",
+    "LOS ANGELES RAMS": "LA", "MIAMI DOLPHINS": "MIA", "MINNESOTA VIKINGS": "MIN",
+    "NEW ENGLAND PATRIOTS": "NE", "NEW ORLEANS SAINTS": "NO", "NEW YORK GIANTS": "NYG",
+    "NEW YORK JETS": "NYJ", "PHILADELPHIA EAGLES": "PHI", "PITTSBURGH STEELERS": "PIT",
+    "SAN FRANCISCO 49ERS": "SF", "SEATTLE SEAHAWKS": "SEA", "TAMPA BAY BUCCANEERS": "TB",
+    "TENNESSEE TITANS": "TEN", "WASHINGTON COMMANDERS": "WAS"
+}
 
 # ==========================================
 # --- SIDEBAR: RISK & STAGE 0 CONTROLS ---
@@ -53,13 +101,17 @@ min_temp_f = st.sidebar.slider("Weather Cold Caution (°F)", 10, 45, 32, 1)
 min_edge_pct = st.sidebar.number_input("Min No-Vig Edge (%)", min_value=1.0, max_value=15.0, value=3.5, step=0.5)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("Live Odds Feed (Optional)")
+st.sidebar.subheader("Live Odds Feed (The Odds API)")
 default_odds_key = st.secrets.get("ODDS_API_KEY", "") if hasattr(st, "secrets") else ""
-odds_api_key = st.sidebar.text_input("The Odds API Key", value=default_odds_key, type="password")
+odds_api_key = st.sidebar.text_input("API Key", value=default_odds_key, type="password")
+max_events_scan = st.sidebar.slider("Max Games to Scan (Credit Guard)", 1, 16, 14, 1)
 
 # ==========================================
 # --- 2026 DATA LOADERS (SCHEMA-HARDENED) ---
 # ==========================================
+def normalize_name(name: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(name).upper())
+
 @st.cache_data(ttl=300)
 def load_all_2026_feeds():
     data = {
@@ -80,23 +132,12 @@ def load_all_2026_feeds():
             if "season_type" in df.columns:
                 df = df[df["season_type"].astype(str).str.upper() == "REG"]
 
-            # Normalize nflreadpy vs nfl_data_py schema column names
             if "recent_team" not in df.columns:
-                if "team" in df.columns:
-                    df["recent_team"] = df["team"]
-                elif "posteam" in df.columns:
-                    df["recent_team"] = df["posteam"]
-                else:
-                    df["recent_team"] = "UNK"
-
+                df["recent_team"] = df["team"] if "team" in df.columns else (df["posteam"] if "posteam" in df.columns else "UNK")
             if "player_display_name" not in df.columns:
-                if "player_name" in df.columns:
-                    df["player_display_name"] = df["player_name"]
-                elif "player" in df.columns:
-                    df["player_display_name"] = df["player"]
-                else:
-                    df["player_display_name"] = "UNKNOWN"
+                df["player_display_name"] = df["player_name"] if "player_name" in df.columns else (df["player"] if "player" in df.columns else "UNKNOWN")
 
+            df["norm_name"] = df["player_display_name"].apply(normalize_name)
             data["stats"] = df
     except Exception as e:
         st.error(f"Player stats feed error: {e}")
@@ -129,7 +170,7 @@ def load_all_2026_feeds():
     except Exception:
         pass
 
-    # 4. Play-by-Play Neutral-Script Efficiency (Polars fast aggregation)
+    # 4. Play-by-Play Neutral-Script Efficiency (5%-95% WP)
     try:
         pbp = nfl.load_pbp(seasons=[2026])
         if pbp is not None and not pbp.is_empty():
@@ -138,10 +179,7 @@ def load_all_2026_feeds():
                 (pl.col("play_type").is_in(["pass", "run"])) &
                 (pl.col("epa").is_not_null())
             )
-            if "wp" in pbp_reg.columns:
-                pbp_neutral = pbp_reg.filter((pl.col("wp") >= 0.05) & (pl.col("wp") <= 0.95))
-            else:
-                pbp_neutral = pbp_reg
+            pbp_neutral = pbp_reg.filter((pl.col("wp") >= 0.05) & (pl.col("wp") <= 0.95)) if "wp" in pbp_reg.columns else pbp_reg
 
             off_agg = (
                 pbp_neutral.group_by("posteam")
@@ -150,6 +188,7 @@ def load_all_2026_feeds():
                     pl.col("epa").filter(pl.col("play_type") == "run").mean().alias("OFF_RUSH_EPA"),
                     pl.col("success").mean().alias("OFF_SUCCESS_RATE"),
                     (pl.col("play_type") == "pass").mean().alias("PASS_RATE"),
+                    # pass_oe in nflreadpy is already on a -100 to +100 percentage scale
                     pl.col("pass_oe").mean().alias("PROE") if "pass_oe" in pbp_neutral.columns else pl.lit(0.0).alias("PROE")
                 ])
                 .drop_nulls("posteam")
@@ -175,46 +214,103 @@ def load_all_2026_feeds():
 
     return data
 
-@st.cache_data(ttl=120)
-def fetch_live_odds(api_key: str):
-    if not api_key:
-        return pd.DataFrame()
-    url = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds"
-    params = {
-        "apiKey": api_key,
-        "regions": "us",
-        "markets": "h2h,spreads,totals",
-        "oddsFormat": "american"
-    }
+@st.cache_data(ttl=1800)
+def fetch_stadium_forecast(home_team: str):
+    """Fetches live pre-game forecast from Open-Meteo (zero API key required)."""
+    info = NFL_STADIUMS.get(str(home_team).upper())
+    if not info:
+        return "OUTDOORS", np.nan, np.nan
+    lat, lon, roof = info
+    if roof == "DOME":
+        return "DOME", 0.0, 70.0
     try:
-        resp = requests.get(url, params=params, timeout=10)
-        if resp.status_code == 200:
-            games = resp.json()
-            rows = []
-            for g in games:
-                home = g.get("home_team", "")
-                away = g.get("away_team", "")
-                book = g["bookmakers"][0] if g.get("bookmakers") else None
-                spread_h, total_pts = np.nan, np.nan
-                if book:
-                    for m in book.get("markets", []):
-                        if m["key"] == "spreads":
-                            for o in m["outcomes"]:
-                                if o["name"] == home:
-                                    spread_h = o.get("point", np.nan)
-                        elif m["key"] == "totals":
-                            if m["outcomes"]:
-                                total_pts = m["outcomes"][0].get("point", np.nan)
-                rows.append({
-                    "MATCHUP": f"{away} @ {home}",
-                    "BOOKMAKER": book["title"] if book else "N/A",
-                    "LIVE_SPREAD_HOME": spread_h,
-                    "LIVE_TOTAL": total_pts
-                })
-            return pd.DataFrame(rows)
+        url = (
+            f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+            "&current=temperature_2m,wind_speed_10m&temperature_unit=fahrenheit&wind_speed_unit=mph"
+        )
+        r = requests.get(url, timeout=4)
+        if r.status_code == 200:
+            cur = r.json().get("current", {})
+            return "OUTDOORS", float(cur.get("wind_speed_10m", np.nan)), float(cur.get("temperature_2m", np.nan))
     except Exception:
         pass
-    return pd.DataFrame()
+    return "OUTDOORS", np.nan, np.nan
+
+@st.cache_data(ttl=900)
+def scan_slate_props_from_odds_api(api_key: str, max_events: int):
+    """Fetches upcoming NFL events (0 credits) and event-level player yardage props."""
+    if not api_key:
+        return pd.DataFrame(), "Missing API Key"
+    base_url = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl"
+    try:
+        ev_resp = requests.get(f"{base_url}/events", params={"apiKey": api_key}, timeout=10)
+        if ev_resp.status_code != 200:
+            return pd.DataFrame(), f"Events API Error {ev_resp.status_code}: {ev_resp.text[:120]}"
+        events = ev_resp.json()[:max_events]
+        prop_rows = []
+        remaining_quota = ev_resp.headers.get("x-requests-remaining", "N/A")
+
+        for ev in events:
+            ev_id = ev.get("id")
+            home_full = str(ev.get("home_team", "")).upper()
+            away_full = str(ev.get("away_team", "")).upper()
+            home_abbr = TEAM_NAME_TO_ABBR.get(home_full, home_full[:3])
+            away_abbr = TEAM_NAME_TO_ABBR.get(away_full, away_full[:3])
+            matchup_str = f"{away_abbr} @ {home_abbr}"
+
+            p_resp = requests.get(
+                f"{base_url}/events/{ev_id}/odds",
+                params={
+                    "apiKey": api_key,
+                    "regions": "us",
+                    "markets": "player_pass_yds,player_rush_yds,player_reception_yds",
+                    "oddsFormat": "american"
+                },
+                timeout=10
+            )
+            if p_resp.status_code != 200:
+                continue
+            remaining_quota = p_resp.headers.get("x-requests-remaining", remaining_quota)
+            ev_data = p_resp.json()
+            bookmakers = ev_data.get("bookmakers", [])
+            if not bookmakers:
+                continue
+
+            # Prefer DraftKings or FanDuel if available, else first US book
+            book = next((b for b in bookmakers if b["key"] in ["draftkings", "fanduel"]), bookmakers[0])
+            book_title = book.get("title", "US Book")
+
+            for mkt in book.get("markets", []):
+                m_key = mkt.get("key")
+                paired = {}
+                for out in mkt.get("outcomes", []):
+                    player_name = out.get("description", "")
+                    side = str(out.get("name", "")).upper()
+                    pt = out.get("point")
+                    price = out.get("price")
+                    if not player_name or pt is None or price is None:
+                        continue
+                    key = (player_name, float(pt))
+                    paired.setdefault(key, {})[side] = int(price)
+
+                for (p_name, line_pt), sides in paired.items():
+                    if "OVER" in sides and "UNDER" in sides:
+                        prop_rows.append({
+                            "MATCHUP": matchup_str,
+                            "HOME": home_abbr,
+                            "AWAY": away_abbr,
+                            "BOOK": book_title,
+                            "MARKET": m_key,
+                            "PLAYER_RAW": p_name,
+                            "NORM_NAME": normalize_name(p_name),
+                            "LINE": line_pt,
+                            "OVER_ODDS": sides["OVER"],
+                            "UNDER_ODDS": sides["UNDER"]
+                        })
+
+        return pd.DataFrame(prop_rows), f"OK (Credits Remaining: {remaining_quota})"
+    except Exception as e:
+        return pd.DataFrame(), f"Request exception: {e}"
 
 feeds = load_all_2026_feeds()
 stats_df = feeds["stats"]
@@ -232,10 +328,10 @@ if stats_df.empty:
 # ==========================================
 if not snaps_df.empty and {"player", "team", "week", "offense_pct"}.issubset(snaps_df.columns) and "week" in stats_df.columns:
     snaps_clean = snaps_df[["player", "team", "week", "offense_pct"]].copy()
-    snaps_clean["join_name"] = snaps_clean["player"].astype(str).str.upper().str.strip()
+    snaps_clean["join_name"] = snaps_clean["player"].apply(normalize_name)
     snaps_clean["join_team"] = snaps_clean["team"].astype(str).str.upper().str.strip()
 
-    stats_df["join_name"] = stats_df["player_display_name"].astype(str).str.upper().str.strip()
+    stats_df["join_name"] = stats_df["player_display_name"].apply(normalize_name)
     stats_df["join_team"] = stats_df["recent_team"].astype(str).str.upper().str.strip()
 
     stats_df = pd.merge(
@@ -283,16 +379,85 @@ def compute_player_volatility_profile(p_logs: pd.DataFrame, target_col: str):
     regime = "COILED (LOW ATR)" if cv <= 0.22 else ("NORMAL ATR" if cv <= 0.38 else "HIGH-BETA (WIDE ATR)")
     return season_mean, l5_mean, l5_median, player_atr, regime
 
+def evaluate_prop_signal(pos_code: str, p_history: pd.DataFrame, opp_team: str, bet_side: str, book_line: float, side_odds: int, opp_odds: int, weather_gate: str = "SURF / GO"):
+    metric_map = {"QB": "passing_yards", "RB": "rushing_yards", "WR": "receiving_yards", "TE": "receiving_yards"}
+    target_stat = metric_map.get(pos_code, "receiving_yards")
+
+    s_mean, l5_mean, l5_med, p_atr, vol_regime = compute_player_volatility_profile(p_history, target_stat)
+    avg_snap = float(p_history["SNAP_PCT"].head(3).mean()) if "SNAP_PCT" in p_history.columns and p_history["SNAP_PCT"].notna().any() else 75.0
+
+    funnel_adj = 0.0
+    if not def_eff_df.empty and opp_team in def_eff_df["defteam"].values:
+        opp_row = def_eff_df[def_eff_df["defteam"] == opp_team].iloc[0]
+        if pos_code in ["QB", "WR", "TE"]:
+            opp_def_epa = float(opp_row["DEF_PASS_EPA"])
+            lg_avg_epa = float(def_eff_df["DEF_PASS_EPA"].mean())
+        else:
+            opp_def_epa = float(opp_row["DEF_RUSH_EPA"])
+            lg_avg_epa = float(def_eff_df["DEF_RUSH_EPA"].mean())
+        epa_delta = opp_def_epa - lg_avg_epa
+        funnel_adj = np.clip(epa_delta * 2.5, -0.35, 0.35) * p_atr
+
+    fair_proj = round((0.60 * l5_mean) + (0.40 * s_mean) + funnel_adj, 1)
+
+    z_score = (book_line - fair_proj) / p_atr
+    prob_over = float(1.0 - norm.cdf(z_score))
+    prob_under = float(norm.cdf(z_score))
+
+    novig_over, novig_under = remove_vig(side_odds, opp_odds) if bet_side == "OVER" else remove_vig(opp_odds, side_odds)
+    model_prob = prob_over if bet_side == "OVER" else prob_under
+    book_novig_prob = novig_over if bet_side == "OVER" else novig_under
+    edge_pct = (model_prob - book_novig_prob) * 100.0
+
+    s_eff = np.clip((edge_pct / 10.0) * 100.0, 0.0, 100.0)
+    cv_ratio = p_atr / max(l5_mean, 1.0)
+    s_coil = np.clip(((0.45 - cv_ratio) / 0.25) * 100.0, 0.0, 100.0)
+    s_runway = np.clip(50.0 + (funnel_adj / max(p_atr, 1.0)) * 140.0, 0.0, 100.0)
+    snap_req = min_snap_rb if pos_code == "RB" else min_snap_skill
+    s_liq = 100.0 if avg_snap >= snap_req else 0.0
+
+    cqs_score = round((0.35 * s_eff) + (0.30 * s_coil) + (0.25 * s_runway) + (0.10 * s_liq), 1)
+    liquidity_ok = avg_snap >= snap_req
+
+    if weather_gate == "WIND LOCKOUT" and pos_code in ["QB", "WR", "TE"] and bet_side == "OVER":
+        gate_label, r_tier = "LOCKOUT: WIND", 0.0
+    elif not liquidity_ok:
+        gate_label, r_tier = f"LOCKOUT: SNAP {avg_snap:.0f}%", 0.0
+    elif edge_pct < min_edge_pct:
+        gate_label, r_tier = f"PASS: EDGE {edge_pct:.1f}%", 0.0
+    elif cqs_score < 60.0:
+        gate_label, r_tier = f"PASS: CQS {cqs_score}", 0.0
+    else:
+        if cqs_score >= 80.0 and edge_pct >= 7.5:
+            gate_label, r_tier = "EXECUTE: APEX", apex_r_pct
+        elif cqs_score >= 65.0 and edge_pct >= 5.0:
+            gate_label, r_tier = "EXECUTE: STD", std_r_pct
+        else:
+            gate_label, r_tier = "EXECUTE: CAUT", caut_r_pct
+
+    return {
+        "fair_proj": fair_proj,
+        "l5_med": l5_med,
+        "p_atr": p_atr,
+        "vol_regime": vol_regime,
+        "avg_snap": avg_snap,
+        "model_prob": model_prob * 100.0,
+        "book_novig_prob": book_novig_prob * 100.0,
+        "edge_pct": edge_pct,
+        "cqs_score": cqs_score,
+        "gate_label": gate_label,
+        "r_tier": r_tier,
+        "dollar_stake": round(bankroll * (r_tier / 100.0), 2)
+    }
+
 def build_position_cluster_table(pos_df: pd.DataFrame, base_agg: dict, target_metric: str, sort_col: str):
     if pos_df.empty:
         return pd.DataFrame()
-
     valid_agg = {k: v for k, v in base_agg.items() if k in pos_df.columns}
     if "week" in pos_df.columns:
         valid_agg["week"] = "nunique"
     if "SNAP_PCT" in pos_df.columns:
         valid_agg["SNAP_PCT"] = "mean"
-
     if not valid_agg:
         return pd.DataFrame()
 
@@ -322,7 +487,6 @@ def build_position_cluster_table(pos_df: pd.DataFrame, base_agg: dict, target_me
 
     if sort_col in grouped.columns:
         grouped = grouped.sort_values(by=sort_col, ascending=False)
-
     return grouped
 
 # ==========================================
@@ -330,7 +494,7 @@ def build_position_cluster_table(pos_df: pd.DataFrame, base_agg: dict, target_me
 # ==========================================
 tab1, tab2, tab3, tab4 = st.tabs([
     "1. STAGE 0: SLATE & MACRO TIDE",
-    "2. CQS & FAIR-LINE EXECUTION",
+    "2. CQS & AUTOMATED PROP SCANNER",
     "3. PLAYER CLUSTER & ATR MATRIX",
     "4. TEAM DEFENSE & FUNNEL MATRIX"
 ])
@@ -338,8 +502,10 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # ==============================================================================
 # TAB 1: STAGE 0 SLATE & MACRO TIDE
 # ==============================================================================
+slate_weather_map = {}
+
 with tab1:
-    st.subheader("Stage 0 Macro Environment, Odds & Weather Gates")
+    st.subheader("Stage 0 Macro Environment, Odds & Live Weather Gates")
 
     if sched_df.empty or "week" not in sched_df.columns:
         st.info("2026 schedule feed unavailable.")
@@ -354,15 +520,16 @@ with tab1:
 
         slate_rows = []
         for _, g in week_games.iterrows():
-            home = g.get("home_team", "")
-            away = g.get("away_team", "")
+            home = str(g.get("home_team", "")).upper()
+            away = str(g.get("away_team", "")).upper()
             spread = g.get("spread_line", np.nan)
             total = g.get("total_line", np.nan)
-            roof = str(g.get("roof", "outdoors")).upper()
+            raw_roof = g.get("roof")
             wind = g.get("wind", np.nan)
             temp = g.get("temp", np.nan)
             h_rest = g.get("home_rest", 7)
             a_rest = g.get("away_rest", 7)
+            is_unplayed = pd.isna(g.get("result")) if "result" in g else True
 
             if pd.notna(total) and pd.notna(spread):
                 home_imp = round((total + spread) / 2.0, 1)
@@ -370,17 +537,30 @@ with tab1:
             else:
                 home_imp, away_imp = np.nan, np.nan
 
+            # Resolve roof & live forecast for unplayed games where nflreadpy has NaN
+            if pd.isna(raw_roof) or str(raw_roof).upper() in ["NAN", "NONE", ""]:
+                roof = NFL_STADIUMS.get(home, (0, 0, "OUTDOORS"))[2]
+            else:
+                roof = str(raw_roof).upper()
+
             is_dome = roof in ["DOME", "CLOSED"]
-            wind_val = 0.0 if is_dome else (float(wind) if pd.notna(wind) else 0.0)
-            temp_val = 70.0 if is_dome else (float(temp) if pd.notna(temp) else 65.0)
+            if is_dome:
+                wind_val, temp_val = 0.0, 70.0
+            elif is_unplayed and (pd.isna(wind) or pd.isna(temp)):
+                _, wind_val, temp_val = fetch_stadium_forecast(home)
+            else:
+                wind_val = float(wind) if pd.notna(wind) else np.nan
+                temp_val = float(temp) if pd.notna(temp) else np.nan
 
             gate_status = "SURF / GO"
-            if not is_dome and wind_val >= max_wind_mph:
+            if not is_dome and pd.notna(wind_val) and wind_val >= max_wind_mph:
                 gate_status = "WIND LOCKOUT"
-            elif not is_dome and temp_val <= min_temp_f:
+            elif not is_dome and pd.notna(temp_val) and temp_val <= min_temp_f:
                 gate_status = "COLD CAUTION"
             elif pd.notna(h_rest) and pd.notna(a_rest) and abs(h_rest - a_rest) >= 4:
                 gate_status = "REST ASYMMETRY"
+
+            slate_weather_map[f"{away} @ {home}"] = gate_status
 
             slate_rows.append({
                 "WEEK": selected_week,
@@ -390,22 +570,14 @@ with tab1:
                 "AWAY IMP": away_imp,
                 "HOME IMP": home_imp,
                 "ROOF": roof,
-                "WIND (MPH)": 0 if is_dome else wind,
-                "TEMP (°F)": 70 if is_dome else temp,
+                "WIND (MPH)": round(wind_val, 1) if pd.notna(wind_val) else "N/A",
+                "TEMP (°F)": round(temp_val, 1) if pd.notna(temp_val) else "N/A",
                 "REST (A/H)": f"{int(a_rest)}d / {int(h_rest)}d" if pd.notna(a_rest) and pd.notna(h_rest) else "N/A",
                 "STAGE 0 GATE": gate_status
             })
 
         slate_display = pd.DataFrame(slate_rows)
         st.dataframe(slate_display, hide_index=True, use_container_width=True)
-
-        if odds_api_key:
-            st.markdown("#### Live Sportsbook Order Book (The Odds API)")
-            live_odds_df = fetch_live_odds(odds_api_key)
-            if not live_odds_df.empty:
-                st.dataframe(live_odds_df, hide_index=True, use_container_width=True)
-            else:
-                st.info("No live NFL lines returned or API quota reached.")
 
     st.markdown("---")
     st.subheader("Neutral-Script Team Offensive Efficiency & Pace (5%–95% WP)")
@@ -415,7 +587,7 @@ with tab1:
         eff_disp["OFF_RUSH_EPA"] = eff_disp["OFF_RUSH_EPA"].round(3)
         eff_disp["OFF_SUCCESS_RATE"] = (eff_disp["OFF_SUCCESS_RATE"] * 100.0).round(1)
         eff_disp["PASS_RATE"] = (eff_disp["PASS_RATE"] * 100.0).round(1)
-        eff_disp["PROE"] = (eff_disp["PROE"] * 100.0).round(1)
+        eff_disp["PROE"] = eff_disp["PROE"].round(1)  # Fixed: already on -100 to +100 percentage scale
         eff_disp = eff_disp.sort_values(by="OFF_PASS_EPA", ascending=False)
         eff_disp.columns = ["TEAM", "NEUTRAL PASS EPA", "NEUTRAL RUSH EPA", "SUCCESS %", "PASS RATE %", "PROE %"]
         st.dataframe(eff_disp, hide_index=True, height=340, use_container_width=True)
@@ -423,23 +595,107 @@ with tab1:
         st.info("Play-by-play neutral efficiency data loading or unavailable.")
 
 # ==============================================================================
-# TAB 2: CQS & FAIR-LINE EXECUTION ENGINE
+# TAB 2: PHASE 2 AUTOMATED PROP SCANNER & MANUAL CALCULATOR
 # ==============================================================================
 with tab2:
-    st.subheader("Composite Quality Score (CQS) & Fair-Line Execution Calculator")
-    st.caption("Evaluates Player ATR, Matchup Funnel Clearance, Stage 0 Weather/Snap Liquidity, and R-Unit Position Sizing.")
+    st.subheader("Phase 2: Automated Full-Slate Prop Scanner & Open Heat Tracker")
+    st.caption("Ingests event-level sportsbook props, runs Stage 0 + CQS + No-Vig Edge filters, and allocates R-units under your 2.00% heat cap.")
+
+    scan_col1, scan_col2 = st.columns([1, 3])
+    with scan_col1:
+        run_scan = st.button("⚡ Scan Live Slate Props", type="primary", use_container_width=True)
+    with scan_col2:
+        if not odds_api_key:
+            st.info("Enter your ODDS_API_KEY in the sidebar (or Streamlit Secrets) to enable one-click full-slate scanning.")
+
+    if run_scan or ("live_props_df" in st.session_state and not st.session_state["live_props_df"].empty):
+        if run_scan:
+            raw_props, status_msg = scan_slate_props_from_odds_api(odds_api_key, max_events_scan)
+            st.session_state["live_props_df"] = raw_props
+            st.session_state["scan_status"] = status_msg
+
+        raw_props = st.session_state.get("live_props_df", pd.DataFrame())
+        st.caption(f"Feed Telemetry: {st.session_state.get('scan_status', '')}")
+
+        if not raw_props.empty:
+            mkt_to_pos = {
+                "player_pass_yds": ["QB"],
+                "player_rush_yds": ["RB", "QB"],
+                "player_reception_yds": ["WR", "TE", "RB"]
+            }
+            evaluated_rows = []
+            for _, pr in raw_props.iterrows():
+                valid_positions = mkt_to_pos.get(pr["MARKET"], [])
+                p_matches = stats_df[
+                    (stats_df["norm_name"] == pr["NORM_NAME"]) &
+                    (stats_df["position"].astype(str).str.upper().isin(valid_positions))
+                ]
+                if p_matches.empty:
+                    continue
+
+                p_team = str(p_matches["recent_team"].iloc[-1]).upper()
+                p_pos = str(p_matches["position"].iloc[-1]).upper()
+                opp_team = pr["AWAY"] if p_team == pr["HOME"] else pr["HOME"]
+                w_gate = slate_weather_map.get(pr["MATCHUP"], "SURF / GO")
+
+                for side, s_odds, o_odds in [
+                    ("OVER", pr["OVER_ODDS"], pr["UNDER_ODDS"]),
+                    ("UNDER", pr["UNDER_ODDS"], pr["OVER_ODDS"])
+                ]:
+                    res = evaluate_prop_signal(p_pos, p_matches, opp_team, side, pr["LINE"], s_odds, o_odds, w_gate)
+                    if res["gate_label"].startswith("EXECUTE"):
+                        evaluated_rows.append({
+                            "MATCHUP": pr["MATCHUP"],
+                            "PLAYER": pr["PLAYER_RAW"],
+                            "POS": p_pos,
+                            "TEAM": p_team,
+                            "OPP": opp_team,
+                            "SIDE": side,
+                            "LINE": pr["LINE"],
+                            "ODDS": f"{s_odds:+d}",
+                            "FAIR": res["fair_proj"],
+                            "ATR": round(res["p_atr"], 1),
+                            "EDGE %": round(res["edge_pct"], 2),
+                            "CQS": res["cqs_score"],
+                            "GATE": res["gate_label"],
+                            "R %": res["r_tier"],
+                            "STAKE ($)": res["dollar_stake"]
+                        })
+
+            if evaluated_rows:
+                exec_df = pd.DataFrame(evaluated_rows).sort_values(by=["CQS", "EDGE %"], ascending=False).reset_index(drop=True)
+
+                # Enforce 2.00% Max Open Heat Cap across top signals
+                cum_heat = 0.0
+                alloc_status = []
+                for _, er in exec_df.iterrows():
+                    if cum_heat + er["R %"] <= max_heat_pct + 1e-6:
+                        cum_heat += er["R %"]
+                        alloc_status.append("ACTIVE SLOT")
+                    else:
+                        alloc_status.append("HEAT CAP HOLD")
+                exec_df["PORTFOLIO SLOT"] = alloc_status
+
+                # Flag same-game correlation clusters
+                game_counts = exec_df[exec_df["PORTFOLIO SLOT"] == "ACTIVE SLOT"]["MATCHUP"].value_counts().to_dict()
+                exec_df["CORRELATION"] = exec_df["MATCHUP"].apply(lambda m: f"MULTI-LEG ({game_counts.get(m, 0)}x)" if game_counts.get(m, 0) > 1 else "SINGLE LEG")
+
+                h1, h2, h3 = st.columns(3)
+                h1.metric("EXECUTE Signals Found", f"{len(exec_df)}")
+                h2.metric("Allocated Open Heat", f"{cum_heat:.2f}% / {max_heat_pct:.2f}%")
+                h3.metric("Active Capital Deployed", f"${bankroll * (cum_heat / 100.0):,.2f}")
+
+                st.dataframe(exec_df, hide_index=True, use_container_width=True)
+            else:
+                st.warning("Props ingested successfully, but 0 setups currently pass all Stage 0, CQS (≥60), and No-Vig Edge gates.")
+
+    st.markdown("---")
+    st.subheader("Single-Prop Manual Execution Calculator")
 
     c1, c2, c3 = st.columns(3)
     with c1:
         calc_pos = st.selectbox("1. Position / Market", ["QB (Passing Yards)", "RB (Rushing Yards)", "WR (Receiving Yards)", "TE (Receiving Yards)"])
     pos_code = calc_pos.split(" ")[0]
-    metric_map = {
-        "QB": "passing_yards",
-        "RB": "rushing_yards",
-        "WR": "receiving_yards",
-        "TE": "receiving_yards"
-    }
-    target_stat = metric_map[pos_code]
 
     pos_pool = stats_df[stats_df["position"].astype(str).str.upper() == pos_code].copy() if "position" in stats_df.columns else pd.DataFrame()
     player_names = sorted(pos_pool["player_display_name"].dropna().unique().tolist()) if not pos_pool.empty else []
@@ -454,7 +710,7 @@ with tab2:
     with m1:
         bet_side = st.selectbox("4. Trade Direction", ["OVER", "UNDER"])
     with m2:
-        book_line = st.number_input("5. Sportsbook Line", min_value=0.5, max_value=500.0, value=65.5, step=0.5)
+        book_line = st.number_input("5. Sportsbook Line", min_value=0.5, max_value=500.0, value=235.5, step=0.5)
     with m3:
         side_odds = st.number_input("6. Target Side Odds", min_value=-500, max_value=500, value=-110, step=5)
     with m4:
@@ -462,78 +718,16 @@ with tab2:
 
     if calc_player and calc_player != "No Players Available":
         p_history = pos_pool[pos_pool["player_display_name"] == calc_player]
-        if "week" in p_history.columns:
-            p_history = p_history.sort_values(by="week", ascending=False)
-        s_mean, l5_mean, l5_med, p_atr, vol_regime = compute_player_volatility_profile(p_history, target_stat)
-        avg_snap = float(p_history["SNAP_PCT"].head(3).mean()) if "SNAP_PCT" in p_history.columns and p_history["SNAP_PCT"].notna().any() else 75.0
-
-        funnel_adj = 0.0
-        if not def_eff_df.empty and calc_opp in def_eff_df["defteam"].values:
-            opp_row = def_eff_df[def_eff_df["defteam"] == calc_opp].iloc[0]
-            if pos_code in ["QB", "WR", "TE"]:
-                opp_def_epa = float(opp_row["DEF_PASS_EPA"])
-                lg_avg_epa = float(def_eff_df["DEF_PASS_EPA"].mean())
-            else:
-                opp_def_epa = float(opp_row["DEF_RUSH_EPA"])
-                lg_avg_epa = float(def_eff_df["DEF_RUSH_EPA"].mean())
-            epa_delta = opp_def_epa - lg_avg_epa
-            funnel_adj = np.clip(epa_delta * 2.5, -0.35, 0.35) * p_atr
-
-        raw_proj = (0.60 * l5_mean) + (0.40 * s_mean) + funnel_adj
-        fair_proj = round(raw_proj, 1)
-
-        z_score = (book_line - fair_proj) / p_atr
-        prob_over = float(1.0 - norm.cdf(z_score))
-        prob_under = float(norm.cdf(z_score))
-
-        novig_over, novig_under = remove_vig(side_odds, opp_odds) if bet_side == "OVER" else remove_vig(opp_odds, side_odds)
-        model_prob = prob_over if bet_side == "OVER" else prob_under
-        book_novig_prob = novig_over if bet_side == "OVER" else novig_under
-        edge_pct = (model_prob - book_novig_prob) * 100.0
-
-        s_eff = np.clip((edge_pct / 10.0) * 100.0, 0.0, 100.0)
-        cv_ratio = p_atr / max(l5_mean, 1.0)
-        s_coil = np.clip(((0.45 - cv_ratio) / 0.25) * 100.0, 0.0, 100.0)
-        s_runway = np.clip(50.0 + (funnel_adj / max(p_atr, 1.0)) * 140.0, 0.0, 100.0)
-        snap_req = min_snap_rb if pos_code == "RB" else min_snap_skill
-        s_liq = 100.0 if avg_snap >= snap_req else 0.0
-
-        cqs_score = round((0.35 * s_eff) + (0.30 * s_coil) + (0.25 * s_runway) + (0.10 * s_liq), 1)
-
-        liquidity_ok = avg_snap >= snap_req
-        gate_label = "LOCKOUT: NO EDGE"
-        r_tier = 0.0
-
-        if not liquidity_ok:
-            gate_label = f"LOCKOUT: LOW SNAP ({avg_snap:.0f}% < {snap_req}%)"
-            r_tier = 0.0
-        elif edge_pct < min_edge_pct:
-            gate_label = f"PASS: EDGE {edge_pct:.1f}% < {min_edge_pct:.1f}%"
-            r_tier = 0.0
-        elif cqs_score < 60.0:
-            gate_label = f"PASS: CQS {cqs_score} < 60.0"
-            r_tier = 0.0
-        else:
-            if cqs_score >= 80.0 and edge_pct >= 7.5:
-                gate_label = "EXECUTE (APEX GEAR)"
-                r_tier = apex_r_pct
-            elif cqs_score >= 65.0 and edge_pct >= 5.0:
-                gate_label = "EXECUTE (STANDARD GEAR)"
-                r_tier = std_r_pct
-            else:
-                gate_label = "EXECUTE (CAUTION GEAR)"
-                r_tier = caut_r_pct
-
-        dollar_stake = round(bankroll * (r_tier / 100.0), 2)
-        max_slots = int(max_heat_pct // r_tier) if r_tier > 0 else 0
+        res = evaluate_prop_signal(pos_code, p_history, calc_opp, bet_side, book_line, side_odds, opp_odds)
+        max_slots = int(max_heat_pct // res["r_tier"]) if res["r_tier"] > 0 else 0
 
         st.markdown("---")
         k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("Model Fair Line", f"{fair_proj}", f"L5 Med: {l5_med:.1f} | ATR: ±{p_atr:.1f}")
-        k2.metric("Model vs No-Vig Prob", f"{model_prob*100:.1f}% vs {book_novig_prob*100:.1f}%", f"Edge: {edge_pct:+.2f}%")
-        k3.metric("CQS Score", f"{cqs_score} / 100", vol_regime)
-        k4.metric("Gate Status", gate_label, f"L3 Snap: {avg_snap:.1f}%")
-        k5.metric("R-Unit Stake", f"${dollar_stake:,.2f} ({r_tier}%)", f"Max Heat Slots: {max_slots} @ {max_heat_pct}% Cap")
+        k1.metric("Fair Line", f"{res['fair_proj']}", f"Med: {res['l5_med']:.1f} | ATR: ±{res['p_atr']:.1f}")
+        k2.metric("Edge (Model vs Book)", f"{res['edge_pct']:+.2f}%", f"{res['model_prob']:.1f}% vs {res['book_novig_prob']:.1f}%")
+        k3.metric("CQS Score", f"{res['cqs_score']} / 100", res["vol_regime"])
+        k4.metric("Gate Status", res["gate_label"], f"L3 Snap: {res['avg_snap']:.1f}%")
+        k5.metric("R-Unit Stake", f"${res['dollar_stake']:,.2f}", f"{res['r_tier']}% R ({max_slots} slots max)")
 
 # ==============================================================================
 # TAB 3: PLAYER CLUSTER & ATR MATRIX
@@ -649,11 +843,11 @@ with tab4:
                     r_epa = r.get("DEF_RUSH_EPA", 0.0)
                     if pd.isna(p_epa) or pd.isna(r_epa):
                         return "BALANCED"
-                    if p_epa > 0.06 and p_epa > (r_epa + 0.08):
+                    if p_epa > 0.03 and (p_epa - r_epa) > 0.05:
                         return "PASS FUNNEL (TARGET WR/QB)"
-                    elif r_epa > 0.02 and r_epa > (p_epa + 0.08):
+                    elif r_epa > 0.01 and (r_epa - p_epa) > 0.05:
                         return "RUN FUNNEL (TARGET RB)"
-                    elif p_epa < -0.05 and r_epa < -0.08:
+                    elif p_epa < -0.05 and r_epa < -0.07:
                         return "ELITE LOCKDOWN (AVOID)"
                     return "BALANCED"
 
