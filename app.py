@@ -76,6 +76,12 @@ TEAM_NAME_TO_ABBR = {
     "TENNESSEE TITANS": "TEN", "WASHINGTON COMMANDERS": "WAS"
 }
 
+MARKET_LABELS = {
+    "player_pass_yds": "PASS YDS",
+    "player_rush_yds": "RUSH YDS",
+    "player_reception_yds": "REC YDS"
+}
+
 # ==========================================
 # --- SIDEBAR: RISK & STAGE 0 CONTROLS ---
 # ==========================================
@@ -104,7 +110,6 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("Live Odds Feed (The Odds API)")
 default_odds_key = st.secrets.get("ODDS_API_KEY", "") if hasattr(st, "secrets") else ""
 odds_api_key = st.sidebar.text_input("API Key", value=default_odds_key, type="password")
-max_events_scan = st.sidebar.slider("Max Games to Scan (Credit Guard)", 1, 16, 14, 1)
 
 # ==========================================
 # --- 2026 DATA LOADERS (SCHEMA-HARDENED) ---
@@ -122,7 +127,6 @@ def load_all_2026_feeds():
         "def_eff": pd.DataFrame()
     }
 
-    # 1. Player Stats (2026)
     try:
         p_stats = nfl.load_player_stats(seasons=[2026])
         if p_stats is not None and not p_stats.is_empty():
@@ -142,7 +146,6 @@ def load_all_2026_feeds():
     except Exception as e:
         st.error(f"Player stats feed error: {e}")
 
-    # 2. Schedules, Lines, Weather & Rest (2026)
     try:
         sched = nfl.load_schedules(seasons=[2026])
         if sched is not None and not sched.is_empty():
@@ -155,7 +158,6 @@ def load_all_2026_feeds():
     except Exception as e:
         st.warning(f"Schedules feed notice: {e}")
 
-    # 3. Snap Counts (2026)
     try:
         snaps = nfl.load_snap_counts(seasons=[2026])
         if snaps is not None and not snaps.is_empty():
@@ -170,7 +172,6 @@ def load_all_2026_feeds():
     except Exception:
         pass
 
-    # 4. Play-by-Play Neutral-Script Efficiency (5%-95% WP)
     try:
         pbp = nfl.load_pbp(seasons=[2026])
         if pbp is not None and not pbp.is_empty():
@@ -188,7 +189,6 @@ def load_all_2026_feeds():
                     pl.col("epa").filter(pl.col("play_type") == "run").mean().alias("OFF_RUSH_EPA"),
                     pl.col("success").mean().alias("OFF_SUCCESS_RATE"),
                     (pl.col("play_type") == "pass").mean().alias("PASS_RATE"),
-                    # pass_oe in nflreadpy is already on a -100 to +100 percentage scale
                     pl.col("pass_oe").mean().alias("PROE") if "pass_oe" in pbp_neutral.columns else pl.lit(0.0).alias("PROE")
                 ])
                 .drop_nulls("posteam")
@@ -216,7 +216,6 @@ def load_all_2026_feeds():
 
 @st.cache_data(ttl=1800)
 def fetch_stadium_forecast(home_team: str):
-    """Fetches live pre-game forecast from Open-Meteo (zero API key required)."""
     info = NFL_STADIUMS.get(str(home_team).upper())
     if not info:
         return "OUTDOORS", np.nan, np.nan
@@ -236,47 +235,70 @@ def fetch_stadium_forecast(home_team: str):
         pass
     return "OUTDOORS", np.nan, np.nan
 
-@st.cache_data(ttl=900)
-def scan_slate_props_from_odds_api(api_key: str, max_events: int):
-    """Fetches upcoming NFL events (0 credits) and event-level player yardage props."""
+@st.cache_data(ttl=1800)
+def fetch_upcoming_nfl_events(api_key: str):
+    """Zero-credit endpoint: discovers active NFL event IDs and matchups."""
     if not api_key:
-        return pd.DataFrame(), "Missing API Key"
-    base_url = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl"
+        return []
+    base_url = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events"
     try:
-        ev_resp = requests.get(f"{base_url}/events", params={"apiKey": api_key}, timeout=10)
-        if ev_resp.status_code != 200:
-            return pd.DataFrame(), f"Events API Error {ev_resp.status_code}: {ev_resp.text[:120]}"
-        events = ev_resp.json()[:max_events]
-        prop_rows = []
-        remaining_quota = ev_resp.headers.get("x-requests-remaining", "N/A")
+        resp = requests.get(base_url, params={"apiKey": api_key}, timeout=10)
+        if resp.status_code == 200:
+            out = []
+            for ev in resp.json():
+                home_full = str(ev.get("home_team", "")).upper()
+                away_full = str(ev.get("away_team", "")).upper()
+                home_abbr = TEAM_NAME_TO_ABBR.get(home_full, home_full[:3])
+                away_abbr = TEAM_NAME_TO_ABBR.get(away_full, away_full[:3])
+                out.append({
+                    "id": ev.get("id"),
+                    "matchup": f"{away_abbr} @ {home_abbr}",
+                    "home": home_abbr,
+                    "away": away_abbr,
+                    "commence": ev.get("commence_time", "")
+                })
+            return out
+    except Exception:
+        pass
+    return []
 
-        for ev in events:
-            ev_id = ev.get("id")
-            home_full = str(ev.get("home_team", "")).upper()
-            away_full = str(ev.get("away_team", "")).upper()
-            home_abbr = TEAM_NAME_TO_ABBR.get(home_full, home_full[:3])
-            away_abbr = TEAM_NAME_TO_ABBR.get(away_full, away_full[:3])
-            matchup_str = f"{away_abbr} @ {home_abbr}"
+@st.cache_data(ttl=900)
+def scan_selected_events_props(api_key: str, selected_events: tuple, selected_markets: tuple):
+    """Fetches props strictly for user-selected games & markets to conserve API credits."""
+    if not api_key or not selected_events or not selected_markets:
+        return pd.DataFrame(), "No events or markets selected."
 
+    base_url = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl"
+    markets_param = ",".join(selected_markets)
+    prop_rows = []
+    remaining_quota = "N/A"
+    credits_spent = 0
+
+    try:
+        for ev_id, matchup_str, home_abbr, away_abbr in selected_events:
             p_resp = requests.get(
                 f"{base_url}/events/{ev_id}/odds",
                 params={
                     "apiKey": api_key,
                     "regions": "us",
-                    "markets": "player_pass_yds,player_rush_yds,player_reception_yds",
+                    "markets": markets_param,
                     "oddsFormat": "american"
                 },
                 timeout=10
             )
             if p_resp.status_code != 200:
                 continue
+
             remaining_quota = p_resp.headers.get("x-requests-remaining", remaining_quota)
+            last_cost = p_resp.headers.get("x-requests-last")
+            if last_cost and str(last_cost).isdigit():
+                credits_spent += int(last_cost)
+
             ev_data = p_resp.json()
             bookmakers = ev_data.get("bookmakers", [])
             if not bookmakers:
                 continue
 
-            # Prefer DraftKings or FanDuel if available, else first US book
             book = next((b for b in bookmakers if b["key"] in ["draftkings", "fanduel"]), bookmakers[0])
             book_title = book.get("title", "US Book")
 
@@ -308,7 +330,7 @@ def scan_slate_props_from_odds_api(api_key: str, max_events: int):
                             "UNDER_ODDS": sides["UNDER"]
                         })
 
-        return pd.DataFrame(prop_rows), f"OK (Credits Remaining: {remaining_quota})"
+        return pd.DataFrame(prop_rows), f"OK | Scan Cost: {credits_spent} credits | Remaining: {remaining_quota}"
     except Exception as e:
         return pd.DataFrame(), f"Request exception: {e}"
 
@@ -364,7 +386,7 @@ def compute_player_volatility_profile(p_logs: pd.DataFrame, target_col: str):
     if target_col not in p_logs.columns:
         return 0.0, 0.0, 0.0, 0.0, "NO DATA"
     p_sorted = p_logs.sort_values(by="week", ascending=False) if "week" in p_logs.columns else p_logs
-    vals = p_sorted[target_col].dropna().values
+    vals = p_sorted[target_col].fillna(0.0).values
     if len(vals) == 0:
         return 0.0, 0.0, 0.0, 0.0, "NO DATA"
 
@@ -379,17 +401,29 @@ def compute_player_volatility_profile(p_logs: pd.DataFrame, target_col: str):
     regime = "COILED (LOW ATR)" if cv <= 0.22 else ("NORMAL ATR" if cv <= 0.38 else "HIGH-BETA (WIDE ATR)")
     return season_mean, l5_mean, l5_median, player_atr, regime
 
-def evaluate_prop_signal(pos_code: str, p_history: pd.DataFrame, opp_team: str, bet_side: str, book_line: float, side_odds: int, opp_odds: int, weather_gate: str = "SURF / GO"):
-    metric_map = {"QB": "passing_yards", "RB": "rushing_yards", "WR": "receiving_yards", "TE": "receiving_yards"}
-    target_stat = metric_map.get(pos_code, "receiving_yards")
+def evaluate_prop_signal(pos_code: str, p_history: pd.DataFrame, opp_team: str, bet_side: str, book_line: float, side_odds: int, opp_odds: int, weather_gate: str = "SURF / GO", market_key: str = ""):
+    # CRITICAL: Map target stat by prop market first so QB rush yards & RB rec yards score against true distributions
+    market_to_stat = {
+        "player_pass_yds": "passing_yards",
+        "player_rush_yds": "rushing_yards",
+        "player_reception_yds": "receiving_yards"
+    }
+    pos_to_stat = {
+        "QB": "passing_yards",
+        "RB": "rushing_yards",
+        "WR": "receiving_yards",
+        "TE": "receiving_yards"
+    }
+    target_stat = market_to_stat.get(market_key, pos_to_stat.get(pos_code, "receiving_yards"))
 
     s_mean, l5_mean, l5_med, p_atr, vol_regime = compute_player_volatility_profile(p_history, target_stat)
     avg_snap = float(p_history["SNAP_PCT"].head(3).mean()) if "SNAP_PCT" in p_history.columns and p_history["SNAP_PCT"].notna().any() else 75.0
 
+    # Matchup funnel adjustment aligned to the specific stat type (passing vs rushing)
     funnel_adj = 0.0
     if not def_eff_df.empty and opp_team in def_eff_df["defteam"].values:
         opp_row = def_eff_df[def_eff_df["defteam"] == opp_team].iloc[0]
-        if pos_code in ["QB", "WR", "TE"]:
+        if target_stat in ["passing_yards", "receiving_yards"]:
             opp_def_epa = float(opp_row["DEF_PASS_EPA"])
             lg_avg_epa = float(def_eff_df["DEF_PASS_EPA"].mean())
         else:
@@ -419,7 +453,7 @@ def evaluate_prop_signal(pos_code: str, p_history: pd.DataFrame, opp_team: str, 
     cqs_score = round((0.35 * s_eff) + (0.30 * s_coil) + (0.25 * s_runway) + (0.10 * s_liq), 1)
     liquidity_ok = avg_snap >= snap_req
 
-    if weather_gate == "WIND LOCKOUT" and pos_code in ["QB", "WR", "TE"] and bet_side == "OVER":
+    if weather_gate == "WIND LOCKOUT" and target_stat in ["passing_yards", "receiving_yards"] and bet_side == "OVER":
         gate_label, r_tier = "LOCKOUT: WIND", 0.0
     elif not liquidity_ok:
         gate_label, r_tier = f"LOCKOUT: SNAP {avg_snap:.0f}%", 0.0
@@ -537,7 +571,6 @@ with tab1:
             else:
                 home_imp, away_imp = np.nan, np.nan
 
-            # Resolve roof & live forecast for unplayed games where nflreadpy has NaN
             if pd.isna(raw_roof) or str(raw_roof).upper() in ["NAN", "NONE", ""]:
                 roof = NFL_STADIUMS.get(home, (0, 0, "OUTDOORS"))[2]
             else:
@@ -587,7 +620,7 @@ with tab1:
         eff_disp["OFF_RUSH_EPA"] = eff_disp["OFF_RUSH_EPA"].round(3)
         eff_disp["OFF_SUCCESS_RATE"] = (eff_disp["OFF_SUCCESS_RATE"] * 100.0).round(1)
         eff_disp["PASS_RATE"] = (eff_disp["PASS_RATE"] * 100.0).round(1)
-        eff_disp["PROE"] = eff_disp["PROE"].round(1)  # Fixed: already on -100 to +100 percentage scale
+        eff_disp["PROE"] = eff_disp["PROE"].round(1)
         eff_disp = eff_disp.sort_values(by="OFF_PASS_EPA", ascending=False)
         eff_disp.columns = ["TEAM", "NEUTRAL PASS EPA", "NEUTRAL RUSH EPA", "SUCCESS %", "PASS RATE %", "PROE %"]
         st.dataframe(eff_disp, hide_index=True, height=340, use_container_width=True)
@@ -598,99 +631,127 @@ with tab1:
 # TAB 2: PHASE 2 AUTOMATED PROP SCANNER & MANUAL CALCULATOR
 # ==============================================================================
 with tab2:
-    st.subheader("Phase 2: Automated Full-Slate Prop Scanner & Open Heat Tracker")
-    st.caption("Ingests event-level sportsbook props, runs Stage 0 + CQS + No-Vig Edge filters, and allocates R-units under your 2.00% heat cap.")
+    st.subheader("Phase 2: Credit-Guarded Prop Scanner & Open Heat Tracker")
+    st.caption("Select specific matchups & markets to minimize API credit burn (1 credit = 1 game × 1 market).")
 
-    scan_col1, scan_col2 = st.columns([1, 3])
-    with scan_col1:
-        run_scan = st.button("⚡ Scan Live Slate Props", type="primary", use_container_width=True)
-    with scan_col2:
-        if not odds_api_key:
-            st.info("Enter your ODDS_API_KEY in the sidebar (or Streamlit Secrets) to enable one-click full-slate scanning.")
+    if not odds_api_key:
+        st.info("Enter your ODDS_API_KEY in the sidebar (or Streamlit Secrets) to enable surgical live prop scanning.")
+    else:
+        # 0-Credit Event Discovery
+        upcoming_events = fetch_upcoming_nfl_events(odds_api_key)
+        event_label_map = {f"{e['matchup']} ({e['commence'][:10]})": e for e in upcoming_events}
+        all_labels = list(event_label_map.keys())
 
-    if run_scan or ("live_props_df" in st.session_state and not st.session_state["live_props_df"].empty):
+        sc1, sc2 = st.columns([2, 1])
+        with sc1:
+            chosen_game_labels = st.multiselect(
+                "1. Select Target Matchups (0-Credit Discovery)",
+                options=all_labels,
+                default=all_labels[:1] if all_labels else [],
+                help="Select 1–3 high-total or Stage 0 SURF/GO games to keep credit cost under 10 credits per scan."
+            )
+        with sc2:
+            chosen_markets = st.multiselect(
+                "2. Select Prop Markets",
+                options=["player_pass_yds", "player_rush_yds", "player_reception_yds"],
+                default=["player_pass_yds", "player_rush_yds", "player_reception_yds"],
+                format_func=lambda m: MARKET_LABELS.get(m, m)
+            )
+
+        est_cost = len(chosen_game_labels) * len(chosen_markets)
+        btn_col, cost_col = st.columns([1, 3])
+        with btn_col:
+            run_scan = st.button(f"⚡ Scan Selected ({est_cost} Credits)", type="primary", use_container_width=True, disabled=(est_cost == 0))
+        with cost_col:
+            st.caption(f"Pre-Scan Cost Guard: **{est_cost} credits** ({len(chosen_game_labels)} game(s) × {len(chosen_markets)} market(s) × 1 US region). Parameter tweaks below re-run at 0 credits.")
+
         if run_scan:
-            raw_props, status_msg = scan_slate_props_from_odds_api(odds_api_key, max_events_scan)
+            ev_tuples = tuple(
+                (event_label_map[lbl]["id"], event_label_map[lbl]["matchup"], event_label_map[lbl]["home"], event_label_map[lbl]["away"])
+                for lbl in chosen_game_labels
+            )
+            raw_props, status_msg = scan_selected_events_props(odds_api_key, ev_tuples, tuple(chosen_markets))
             st.session_state["live_props_df"] = raw_props
             st.session_state["scan_status"] = status_msg
 
-        raw_props = st.session_state.get("live_props_df", pd.DataFrame())
+    if "live_props_df" in st.session_state and not st.session_state["live_props_df"].empty:
+        raw_props = st.session_state["live_props_df"]
         st.caption(f"Feed Telemetry: {st.session_state.get('scan_status', '')}")
 
-        if not raw_props.empty:
-            mkt_to_pos = {
-                "player_pass_yds": ["QB"],
-                "player_rush_yds": ["RB", "QB"],
-                "player_reception_yds": ["WR", "TE", "RB"]
-            }
-            evaluated_rows = []
-            for _, pr in raw_props.iterrows():
-                valid_positions = mkt_to_pos.get(pr["MARKET"], [])
-                p_matches = stats_df[
-                    (stats_df["norm_name"] == pr["NORM_NAME"]) &
-                    (stats_df["position"].astype(str).str.upper().isin(valid_positions))
-                ]
-                if p_matches.empty:
-                    continue
+        mkt_to_pos = {
+            "player_pass_yds": ["QB"],
+            "player_rush_yds": ["RB", "QB"],
+            "player_reception_yds": ["WR", "TE", "RB"]
+        }
+        evaluated_rows = []
+        for _, pr in raw_props.iterrows():
+            valid_positions = mkt_to_pos.get(pr["MARKET"], [])
+            p_matches = stats_df[
+                (stats_df["norm_name"] == pr["NORM_NAME"]) &
+                (stats_df["position"].astype(str).str.upper().isin(valid_positions))
+            ]
+            if p_matches.empty:
+                continue
 
-                p_team = str(p_matches["recent_team"].iloc[-1]).upper()
-                p_pos = str(p_matches["position"].iloc[-1]).upper()
-                opp_team = pr["AWAY"] if p_team == pr["HOME"] else pr["HOME"]
-                w_gate = slate_weather_map.get(pr["MATCHUP"], "SURF / GO")
+            p_team = str(p_matches["recent_team"].iloc[-1]).upper()
+            p_pos = str(p_matches["position"].iloc[-1]).upper()
+            opp_team = pr["AWAY"] if p_team == pr["HOME"] else pr["HOME"]
+            w_gate = slate_weather_map.get(pr["MATCHUP"], "SURF / GO")
 
-                for side, s_odds, o_odds in [
-                    ("OVER", pr["OVER_ODDS"], pr["UNDER_ODDS"]),
-                    ("UNDER", pr["UNDER_ODDS"], pr["OVER_ODDS"])
-                ]:
-                    res = evaluate_prop_signal(p_pos, p_matches, opp_team, side, pr["LINE"], s_odds, o_odds, w_gate)
-                    if res["gate_label"].startswith("EXECUTE"):
-                        evaluated_rows.append({
-                            "MATCHUP": pr["MATCHUP"],
-                            "PLAYER": pr["PLAYER_RAW"],
-                            "POS": p_pos,
-                            "TEAM": p_team,
-                            "OPP": opp_team,
-                            "SIDE": side,
-                            "LINE": pr["LINE"],
-                            "ODDS": f"{s_odds:+d}",
-                            "FAIR": res["fair_proj"],
-                            "ATR": round(res["p_atr"], 1),
-                            "EDGE %": round(res["edge_pct"], 2),
-                            "CQS": res["cqs_score"],
-                            "GATE": res["gate_label"],
-                            "R %": res["r_tier"],
-                            "STAKE ($)": res["dollar_stake"]
-                        })
+            for side, s_odds, o_odds in [
+                ("OVER", pr["OVER_ODDS"], pr["UNDER_ODDS"]),
+                ("UNDER", pr["UNDER_ODDS"], pr["OVER_ODDS"])
+            ]:
+                res = evaluate_prop_signal(
+                    p_pos, p_matches, opp_team, side, pr["LINE"], s_odds, o_odds,
+                    weather_gate=w_gate, market_key=pr["MARKET"]
+                )
+                if res["gate_label"].startswith("EXECUTE"):
+                    evaluated_rows.append({
+                        "MATCHUP": pr["MATCHUP"],
+                        "PLAYER": pr["PLAYER_RAW"],
+                        "POS": p_pos,
+                        "MARKET": MARKET_LABELS.get(pr["MARKET"], pr["MARKET"]),
+                        "OPP": opp_team,
+                        "SIDE": side,
+                        "LINE": pr["LINE"],
+                        "ODDS": f"{s_odds:+d}",
+                        "FAIR": res["fair_proj"],
+                        "ATR": round(res["p_atr"], 1),
+                        "EDGE %": round(res["edge_pct"], 2),
+                        "CQS": res["cqs_score"],
+                        "GATE": res["gate_label"],
+                        "R %": res["r_tier"],
+                        "STAKE ($)": res["dollar_stake"]
+                    })
 
-            if evaluated_rows:
-                exec_df = pd.DataFrame(evaluated_rows).sort_values(by=["CQS", "EDGE %"], ascending=False).reset_index(drop=True)
+        if evaluated_rows:
+            exec_df = pd.DataFrame(evaluated_rows).sort_values(by=["CQS", "EDGE %"], ascending=False).reset_index(drop=True)
 
-                # Enforce 2.00% Max Open Heat Cap across top signals
-                cum_heat = 0.0
-                alloc_status = []
-                for _, er in exec_df.iterrows():
-                    if cum_heat + er["R %"] <= max_heat_pct + 1e-6:
-                        cum_heat += er["R %"]
-                        alloc_status.append("ACTIVE SLOT")
-                    else:
-                        alloc_status.append("HEAT CAP HOLD")
-                exec_df["PORTFOLIO SLOT"] = alloc_status
+            cum_heat = 0.0
+            alloc_status = []
+            for _, er in exec_df.iterrows():
+                if cum_heat + er["R %"] <= max_heat_pct + 1e-6:
+                    cum_heat += er["R %"]
+                    alloc_status.append("ACTIVE SLOT")
+                else:
+                    alloc_status.append("HEAT CAP HOLD")
+            exec_df["PORTFOLIO SLOT"] = alloc_status
 
-                # Flag same-game correlation clusters
-                game_counts = exec_df[exec_df["PORTFOLIO SLOT"] == "ACTIVE SLOT"]["MATCHUP"].value_counts().to_dict()
-                exec_df["CORRELATION"] = exec_df["MATCHUP"].apply(lambda m: f"MULTI-LEG ({game_counts.get(m, 0)}x)" if game_counts.get(m, 0) > 1 else "SINGLE LEG")
+            game_counts = exec_df[exec_df["PORTFOLIO SLOT"] == "ACTIVE SLOT"]["MATCHUP"].value_counts().to_dict()
+            exec_df["CORRELATION"] = exec_df["MATCHUP"].apply(lambda m: f"MULTI-LEG ({game_counts.get(m, 0)}x)" if game_counts.get(m, 0) > 1 else "SINGLE LEG")
 
-                h1, h2, h3 = st.columns(3)
-                h1.metric("EXECUTE Signals Found", f"{len(exec_df)}")
-                h2.metric("Allocated Open Heat", f"{cum_heat:.2f}% / {max_heat_pct:.2f}%")
-                h3.metric("Active Capital Deployed", f"${bankroll * (cum_heat / 100.0):,.2f}")
+            h1, h2, h3 = st.columns(3)
+            h1.metric("EXECUTE Signals Found", f"{len(exec_df)}")
+            h2.metric("Allocated Open Heat", f"{cum_heat:.2f}% / {max_heat_pct:.2f}%")
+            h3.metric("Active Capital Deployed", f"${bankroll * (cum_heat / 100.0):,.2f}")
 
-                st.dataframe(exec_df, hide_index=True, use_container_width=True)
-            else:
-                st.warning("Props ingested successfully, but 0 setups currently pass all Stage 0, CQS (≥60), and No-Vig Edge gates.")
+            st.dataframe(exec_df, hide_index=True, use_container_width=True)
+        else:
+            st.warning("Props ingested successfully, but 0 setups currently pass all Stage 0, CQS (≥60), and No-Vig Edge gates.")
 
     st.markdown("---")
-    st.subheader("Single-Prop Manual Execution Calculator")
+    st.subheader("Single-Prop Manual Execution Calculator (0 Credits)")
 
     c1, c2, c3 = st.columns(3)
     with c1:
